@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=320" />
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <div id="app">
+      <!-- Idle View -->
+      <div id="view-idle" class="view">
+        <h1>GIF Recorder</h1>
+        <label class="checkbox-row">
+          <input type="checkbox" id="use-region" />
+          <span>Select region</span>
+        </label>
+        <button id="btn-start" class="btn btn-primary">Start Recording</button>
+      </div>
+
+      <!-- Recording View -->
+      <div id="view-recording" class="view hidden">
+        <div class="recording-indicator">
+          <span class="rec-dot"></span>
+          <span id="timer">00:00</span>
+        </div>
+        <button id="btn-stop" class="btn btn-danger">Stop Recording</button>
+      </div>
+
+      <!-- Encoding View -->
+      <div id="view-encoding" class="view hidden">
+        <h2>Encoding GIF...</h2>
+        <div class="progress-bar">
+          <div id="progress-fill" class="progress-fill"></div>
+        </div>
+        <p id="progress-text">0%</p>
+      </div>
+
+      <!-- Preview View -->
+      <div id="view-preview" class="view hidden">
+        <div class="preview-container">
+          <img id="gif-preview" alt="Recorded GIF" />
+        </div>
+        <p id="gif-size" class="meta"></p>
+        <div class="btn-row">
+          <button id="btn-download" class="btn btn-primary">Download</button>
+          <button id="btn-copy" class="btn btn-secondary">Copy</button>
+        </div>
+        <button id="btn-new" class="btn btn-ghost">New Recording</button>
+      </div>
+
+      <!-- Error display -->
+      <div id="error-bar" class="error-bar hidden"></div>
+    </div>
+    <script type="module" src="popup.ts"></script>
+  </body>
+</html>
