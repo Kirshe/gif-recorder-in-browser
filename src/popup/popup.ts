@@ -4,6 +4,18 @@ import type { Region, RecordingState } from "../shared/types.js";
 declare const __BROWSER__: "chrome" | "firefox";
 const isFirefox = __BROWSER__ === "firefox";
 
+// Firefox WebExtensions polyfill — `browser` global is available in Firefox MV3
+declare const browser: typeof chrome & {
+  windows: {
+    create(options: {
+      url: string;
+      type?: string;
+      width?: number;
+      height?: number;
+    }): Promise<unknown>;
+  };
+};
+
 // Elements
 const viewIdle = document.getElementById("view-idle")!;
 const viewRecording = document.getElementById("view-recording")!;
@@ -77,6 +89,18 @@ function formatBytes(bytes: number): string {
 
 // Button handlers
 btnStart.addEventListener("click", async () => {
+  if (isFirefox) {
+    // Firefox: open a dedicated window that survives focus loss from getDisplayMedia()
+    await browser.windows.create({
+      url: browser.runtime.getURL("src/recording/recording.html"),
+      type: "popup",
+      width: 360,
+      height: 320,
+    });
+    window.close();
+    return;
+  }
+
   if (useRegion.checked) {
     // Ask background to inject region selector
     chrome.runtime.sendMessage({ type: "SHOW_REGION_SELECTOR" } satisfies Message);

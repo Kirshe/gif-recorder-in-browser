@@ -31,6 +31,11 @@ if (isChrome) {
     __dirname,
     "src/offscreen/offscreen.html"
   );
+} else {
+  input["recording/recording"] = resolve(
+    __dirname,
+    "src/recording/recording.html"
+  );
 }
 
 export default defineConfig({
@@ -73,7 +78,7 @@ export default defineConfig({
           },
           permissions: isChrome
             ? ["tabCapture", "offscreen", "activeTab", "scripting"]
-            : ["activeTab", "scripting"],
+            : ["activeTab", "scripting", "windows"],
           content_security_policy: {
             extension_pages: "script-src 'self'; object-src 'self'",
           },
