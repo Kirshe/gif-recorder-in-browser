@@ -14,10 +14,21 @@ export type ShowRegionSelector = {
   type: "SHOW_REGION_SELECTOR";
 };
 
+// Popup → Background: ask for the current recording state (popup re-open)
+export type GetState = {
+  type: "GET_STATE";
+};
+
+// Popup → Background: discard the current result and return to idle
+export type ResetSession = {
+  type: "RESET";
+};
+
 // Background → Popup
 export type RecordingStarted = {
   type: "RECORDING_STARTED";
   streamId?: string; // Chrome only
+  recordingStartTime?: number;
 };
 
 export type RecordingStopped = {
@@ -77,6 +88,8 @@ export type Message =
   | StartRecording
   | StopRecording
   | ShowRegionSelector
+  | GetState
+  | ResetSession
   | RecordingStarted
   | RecordingStopped
   | EncodingProgress

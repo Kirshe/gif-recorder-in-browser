@@ -1,10 +1,10 @@
 import type { Message } from "../shared/messages.js";
-import type { Region, RecordingState } from "../shared/types.js";
+import type { RecordingState, SessionSnapshot } from "../shared/types.js";
 
 declare const __BROWSER__: "chrome" | "firefox";
 const isFirefox = __BROWSER__ === "firefox";
 
-// Firefox WebExtensions polyfill — `browser` global is available in Firefox MV3
+// Firefox WebExtensions: the `browser` global with promise-based APIs.
 declare const browser: typeof chrome & {
   windows: {
     create(options: {
@@ -40,11 +40,10 @@ const errorBar = document.getElementById("error-bar")!;
 let state: RecordingState = "idle";
 let recordingStartTime = 0;
 let timerInterval: number | null = null;
-let selectedRegion: Region | undefined;
 let gifDataUrl = "";
-
-// Firefox capture imports (lazy)
-let firefoxCapture: typeof import("../capture/capture-firefox.js") | null = null;
+// Set once the user interacts, so the async initial GET_STATE can't clobber a
+// state the user just changed.
+let interacted = false;
 
 function showView(newState: RecordingState) {
   state = newState;
@@ -52,12 +51,15 @@ function showView(newState: RecordingState) {
   viewRecording.classList.toggle("hidden", state !== "recording");
   viewEncoding.classList.toggle("hidden", state !== "encoding");
   viewPreview.classList.toggle("hidden", state !== "preview");
-  errorBar.classList.add("hidden");
 }
 
 function showError(msg: string) {
   errorBar.textContent = msg;
   errorBar.classList.remove("hidden");
+}
+
+function clearError() {
+  errorBar.classList.add("hidden");
 }
 
 function formatTime(ms: number): string {
@@ -67,8 +69,10 @@ function formatTime(ms: number): string {
   return `${String(m).padStart(2, "0")}:${String(sec).padStart(2, "0")}`;
 }
 
-function startTimer() {
-  recordingStartTime = Date.now();
+function startTimer(from: number) {
+  recordingStartTime = from;
+  timer.textContent = formatTime(Date.now() - recordingStartTime);
+  stopTimer();
   timerInterval = window.setInterval(() => {
     timer.textContent = formatTime(Date.now() - recordingStartTime);
   }, 200);
@@ -87,10 +91,68 @@ function formatBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-// Button handlers
+function sendMessage(message: Message): Promise<any> {
+  return chrome.runtime.sendMessage(message).catch(() => undefined);
+}
+
+// --- Restore state on open ------------------------------------------------
+// The background owns the recording state, so re-render from its snapshot.
+async function init() {
+  const snap = (await sendMessage({ type: "GET_STATE" })) as
+    | SessionSnapshot
+    | undefined;
+  applySnapshot(snap);
+}
+
+function applySnapshot(snap: SessionSnapshot | undefined) {
+  // The user already started/changed something while we were fetching state.
+  if (interacted) return;
+  if (!snap) {
+    showView("idle");
+    return;
+  }
+  if (snap.error) showError(snap.error);
+
+  switch (snap.state) {
+    case "recording":
+      showView("recording");
+      startTimer(snap.recordingStartTime ?? Date.now());
+      break;
+    case "encoding":
+      showView("encoding");
+      onEncodingProgress(snap.progress ?? 0);
+      break;
+    case "preview":
+      if (snap.gifDataUrl) onGifReady(snap.gifDataUrl, snap.size ?? 0);
+      else showView("idle");
+      break;
+    case "selecting-region":
+      // A selection is in progress in the page; nothing useful to show here.
+      showView("idle");
+      break;
+    default:
+      showView("idle");
+  }
+}
+
+// --- Button handlers ------------------------------------------------------
 btnStart.addEventListener("click", async () => {
+  interacted = true;
+  clearError();
+
+  if (useRegion.checked) {
+    // Region selection happens on the page. Interacting with the page closes
+    // this popup anyway, and the background drives the rest (Chrome: starts the
+    // recording; Firefox: opens the recording window with the chosen region),
+    // so close now to let the user draw the rectangle.
+    await sendMessage({ type: "SHOW_REGION_SELECTOR" });
+    window.close();
+    return;
+  }
+
   if (isFirefox) {
-    // Firefox: open a dedicated window that survives focus loss from getDisplayMedia()
+    // Open a dedicated window that survives the focus loss from
+    // getDisplayMedia(); it performs the capture.
     await browser.windows.create({
       url: browser.runtime.getURL("src/recording/recording.html"),
       type: "popup",
@@ -101,100 +163,77 @@ btnStart.addEventListener("click", async () => {
     return;
   }
 
-  if (useRegion.checked) {
-    // Ask background to inject region selector
-    chrome.runtime.sendMessage({ type: "SHOW_REGION_SELECTOR" } satisfies Message);
-    showView("selecting-region");
-    // Wait for REGION_SELECTED message, then start
-    return;
-  }
-  await startRecording();
+  // Chrome, full tab: tell the background to start; render optimistically.
+  showView("recording");
+  startTimer(Date.now());
+  await sendMessage({ type: "START_RECORDING" });
 });
 
 btnStop.addEventListener("click", async () => {
-  await stopRecording();
+  interacted = true;
+  stopTimer();
+  showView("encoding");
+  onEncodingProgress(0);
+  await sendMessage({ type: "STOP_RECORDING" });
 });
 
 btnDownload.addEventListener("click", () => {
+  downloadGif();
+});
+
+btnCopy.addEventListener("click", copyGif);
+
+btnNew.addEventListener("click", async () => {
+  interacted = true;
+  gifDataUrl = "";
+  gifPreview.src = "";
+  useRegion.checked = false;
+  clearError();
+  await sendMessage({ type: "RESET" });
+  showView("idle");
+});
+
+// --- Result helpers -------------------------------------------------------
+function downloadGif() {
   const a = document.createElement("a");
   a.href = gifDataUrl;
   a.download = `recording-${Date.now()}.gif`;
   a.click();
-});
+}
 
-btnCopy.addEventListener("click", async () => {
+// Clipboards can't hold animated GIFs, so copy a PNG of the first frame.
+async function copyGif() {
+  clearError();
   try {
-    const resp = await fetch(gifDataUrl);
-    const blob = await resp.blob();
-    // Clipboard API doesn't support GIF, so we try PNG fallback
-    // Most browsers will reject image/gif in clipboard
-    try {
-      await navigator.clipboard.write([
-        new ClipboardItem({ "image/png": blob }),
-      ]);
-    } catch {
-      // Fallback: download instead
-      const a = document.createElement("a");
-      a.href = gifDataUrl;
-      a.download = `recording-${Date.now()}.gif`;
-      a.click();
-      showError("Clipboard doesn't support GIF — file downloaded instead");
-    }
-  } catch (err) {
-    showError("Copy failed");
-  }
-});
-
-btnNew.addEventListener("click", () => {
-  gifDataUrl = "";
-  gifPreview.src = "";
-  selectedRegion = undefined;
-  useRegion.checked = false;
-  showView("idle");
-});
-
-// Recording control
-async function startRecording(region?: Region) {
-  showView("recording");
-  startTimer();
-
-  if (isFirefox) {
-    // Firefox: capture from popup
-    if (!firefoxCapture) {
-      firefoxCapture = await import("../capture/capture-firefox.js");
-    }
-    await firefoxCapture.startFirefoxCapture(
-      region,
-      onEncodingProgress,
-      onGifReady,
-      onError
-    );
-  } else {
-    // Chrome: tell background to start
-    chrome.runtime.sendMessage({
-      type: "START_RECORDING",
-      region,
-    } satisfies Message);
+    const pngBlob = await gifToPngBlob(gifDataUrl);
+    await navigator.clipboard.write([
+      new ClipboardItem({ "image/png": pngBlob }),
+    ]);
+    showError("Copied first frame as PNG (clipboards can't hold animated GIFs)");
+  } catch {
+    downloadGif();
+    showError("Couldn't copy — file downloaded instead");
   }
 }
 
-async function stopRecording() {
-  stopTimer();
-  showView("encoding");
-
-  if (isFirefox) {
-    if (firefoxCapture) {
-      await firefoxCapture.stopFirefoxCapture(
-        onEncodingProgress,
-        onGifReady,
-        onError
-      );
-    }
-    // Also tell background to clear badge
-    chrome.runtime.sendMessage({ type: "STOP_RECORDING" } satisfies Message);
-  } else {
-    chrome.runtime.sendMessage({ type: "STOP_RECORDING" } satisfies Message);
-  }
+function gifToPngBlob(dataUrl: string): Promise<Blob> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement("canvas");
+      canvas.width = img.naturalWidth;
+      canvas.height = img.naturalHeight;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return reject(new Error("No 2D context"));
+      ctx.drawImage(img, 0, 0);
+      canvas.toBlob((blob) => {
+        if (blob) resolve(blob);
+        else reject(new Error("toBlob failed"));
+      }, "image/png");
+    };
+    img.onerror = () => reject(new Error("Image load failed"));
+    img.src = dataUrl;
+  });
 }
 
 function onEncodingProgress(progress: number) {
@@ -208,41 +247,31 @@ function onGifReady(dataUrl: string, size: number) {
   gifDataUrl = dataUrl;
   gifPreview.src = dataUrl;
   gifSize.textContent = formatBytes(size);
+  stopTimer();
   showView("preview");
 }
 
-function onError(msg: string) {
-  showError(msg);
-  stopTimer();
-  showView("idle");
-}
-
-// Listen for messages from background (Chrome flow)
+// --- Live updates while the popup is open ---------------------------------
 chrome.runtime.onMessage.addListener((message: Message) => {
   switch (message.type) {
     case "RECORDING_STARTED":
-      // Already showing recording view
+      if (message.recordingStartTime) startTimer(message.recordingStartTime);
       break;
-
     case "ENCODING_PROGRESS":
       onEncodingProgress(message.progress);
       break;
-
     case "GIF_READY":
       onGifReady(message.dataUrl, message.size);
       break;
-
     case "ERROR":
-      onError(message.message);
+      stopTimer();
+      showError(message.message);
+      showView("idle");
       break;
-
-    case "REGION_SELECTED":
-      selectedRegion = message.region;
-      startRecording(selectedRegion);
-      break;
-
     case "REGION_CANCELLED":
       showView("idle");
       break;
   }
 });
+
+void init();

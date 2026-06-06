@@ -77,8 +77,8 @@ export default defineConfig({
             default_icon: manifestTemplate.icons,
           },
           permissions: isChrome
-            ? ["tabCapture", "offscreen", "activeTab", "scripting"]
-            : ["activeTab", "scripting", "windows"],
+            ? ["tabCapture", "offscreen", "activeTab", "scripting", "storage"]
+            : ["activeTab", "scripting", "storage"],
           content_security_policy: {
             extension_pages: "script-src 'self'; object-src 'self'",
           },

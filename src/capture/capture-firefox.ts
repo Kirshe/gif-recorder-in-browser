@@ -6,6 +6,7 @@ import { DEFAULT_FPS, MAX_RECORDING_SECONDS } from "../shared/constants.js";
 let grabber: FrameGrabber | null = null;
 let encoderPool: GifEncoderPool | null = null;
 let autoStopTimer: number | null = null;
+let isStopping = false;
 
 export async function startFirefoxCapture(
   region: Region | undefined,
@@ -22,6 +23,7 @@ export async function startFirefoxCapture(
       audio: false,
     });
 
+    isStopping = false;
     encoderPool = new GifEncoderPool();
 
     grabber = new FrameGrabber(
@@ -47,6 +49,10 @@ export async function stopFirefoxCapture(
   onComplete: (dataUrl: string, size: number) => void,
   onError: (msg: string) => void
 ): Promise<void> {
+  // Guard against the manual stop and the auto-stop timer both firing.
+  if (isStopping) return;
+  isStopping = true;
+
   if (autoStopTimer !== null) {
     clearTimeout(autoStopTimer);
     autoStopTimer = null;
@@ -58,6 +64,8 @@ export async function stopFirefoxCapture(
   }
 
   if (encoderPool) {
+    // Switch the UI to the encoding view immediately (covers auto-stop too).
+    onProgress(0);
     try {
       const { width, height } = encoderPool.dimensions;
       const blob = await encoderPool.encode(width, height, DEFAULT_FPS, onProgress);

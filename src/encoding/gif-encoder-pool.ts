@@ -3,109 +3,145 @@ import { WORKER_COUNT } from "../shared/constants.js";
 import type { CapturedFrame } from "../shared/types.js";
 import type { WorkerOutput } from "./gif-worker.js";
 
-interface PendingFrame {
-  data: Uint8ClampedArray;
-  width: number;
-  height: number;
-  index: number;
-}
-
 interface EncodedResult {
   indexedPixels: Uint8Array;
   palette: number[][];
 }
 
+/**
+ * Quantizes frames in a pool of workers *as they are captured* rather than
+ * buffering raw RGBA until the recording stops. This keeps memory bounded to a
+ * handful of in-flight frames plus the (≈4× smaller) indexed results, instead
+ * of holding hundreds of full-resolution RGBA frames at once.
+ */
 export class GifEncoderPool {
-  private frames: PendingFrame[] = [];
+  private workers: Worker[] = [];
+  private idle: Worker[] = [];
+  private queue: CapturedFrame[] = [];
+  private results: (EncodedResult | null)[] = [];
+  private submitted = 0;
+  private completed = 0;
   private _dimensions = { width: 0, height: 0 };
 
-  addFrame(frame: CapturedFrame): void {
-    this._dimensions = { width: frame.width, height: frame.height };
-    this.frames.push({
-      data: frame.data,
-      width: frame.width,
-      height: frame.height,
-      index: frame.index,
-    });
+  private onProgress?: (p: number) => void;
+  private totalAtFinish = 0;
+  private finishing = false;
+  private resolveDone?: () => void;
+  private failure: Error | null = null;
+  private rejectDone?: (err: Error) => void;
+
+  constructor() {
+    for (let i = 0; i < WORKER_COUNT; i++) {
+      const worker = new Worker(new URL("./gif-worker.ts", import.meta.url), {
+        type: "module",
+      });
+      worker.onmessage = (e: MessageEvent<WorkerOutput>) =>
+        this.onWorkerDone(worker, e.data);
+      worker.onerror = (err) => this.onWorkerError(err);
+      this.workers.push(worker);
+      this.idle.push(worker);
+    }
   }
 
   get dimensions() {
     return this._dimensions;
   }
 
+  addFrame(frame: CapturedFrame): void {
+    if (this.failure) return;
+    this._dimensions = { width: frame.width, height: frame.height };
+    this.results[frame.index] = null;
+    this.submitted++;
+    this.queue.push(frame);
+    this.pump();
+  }
+
+  private pump(): void {
+    while (this.idle.length > 0 && this.queue.length > 0) {
+      const worker = this.idle.pop()!;
+      const frame = this.queue.shift()!;
+      // Transfer the frame's buffer — FrameGrabber allocates a fresh ImageData
+      // per frame, so the original is never reused after this point.
+      const buffer = frame.data.buffer;
+      worker.postMessage(
+        {
+          type: "ENCODE_FRAME",
+          rgba: frame.data,
+          width: frame.width,
+          height: frame.height,
+          index: frame.index,
+        },
+        [buffer]
+      );
+    }
+  }
+
+  private onWorkerDone(worker: Worker, data: WorkerOutput): void {
+    this.results[data.index] = {
+      indexedPixels: data.indexedPixels,
+      palette: data.palette,
+    };
+    this.completed++;
+    this.idle.push(worker);
+    this.pump();
+
+    if (this.finishing) {
+      this.onProgress?.(this.totalAtFinish ? this.completed / this.totalAtFinish : 1);
+      if (this.completed === this.submitted) this.resolveDone?.();
+    }
+  }
+
+  private onWorkerError(err: ErrorEvent): void {
+    this.failure = new Error(err.message || "Encoder worker failed");
+    this.terminate();
+    this.rejectDone?.(this.failure);
+  }
+
+  private terminate(): void {
+    for (const w of this.workers) w.terminate();
+    this.workers = [];
+    this.idle = [];
+  }
+
+  /**
+   * Wait for all submitted frames to finish quantizing, then assemble the GIF.
+   */
   async encode(
     width: number,
     height: number,
     fps: number,
     onProgress?: (p: number) => void
   ): Promise<Blob> {
-    const totalFrames = this.frames.length;
-    if (totalFrames === 0) {
+    if (this.failure) {
+      this.terminate();
+      throw this.failure;
+    }
+    if (this.submitted === 0) {
+      this.terminate();
       throw new Error("No frames to encode");
     }
 
-    const encoded = new Array<EncodedResult | null>(totalFrames).fill(null);
-    let completedCount = 0;
-
-    const workers: Worker[] = [];
-    for (let i = 0; i < Math.min(WORKER_COUNT, totalFrames); i++) {
-      const worker = new Worker(
-        new URL("./gif-worker.ts", import.meta.url),
-        { type: "module" }
-      );
-      workers.push(worker);
-    }
+    this.onProgress = onProgress;
+    this.totalAtFinish = this.submitted;
+    this.finishing = true;
+    onProgress?.(this.completed / this.totalAtFinish);
 
     await new Promise<void>((resolve, reject) => {
-      let nextFrameToSend = 0;
-
-      const sendNext = (worker: Worker) => {
-        if (nextFrameToSend >= totalFrames) return;
-        const frame = this.frames[nextFrameToSend];
-        const transferable = frame.data.buffer.slice(0);
-        worker.postMessage(
-          {
-            type: "ENCODE_FRAME",
-            rgba: new Uint8ClampedArray(transferable),
-            width: frame.width,
-            height: frame.height,
-            index: frame.index,
-          },
-          [transferable]
-        );
-        nextFrameToSend++;
-      };
-
-      for (const worker of workers) {
-        worker.onmessage = (e: MessageEvent<WorkerOutput>) => {
-          const { index, indexedPixels, palette } = e.data;
-          encoded[index] = { indexedPixels, palette };
-          completedCount++;
-          onProgress?.(completedCount / totalFrames);
-
-          if (completedCount === totalFrames) {
-            workers.forEach((w) => w.terminate());
-            resolve();
-          } else {
-            sendNext(worker);
-          }
-        };
-
-        worker.onerror = (err) => {
-          workers.forEach((w) => w.terminate());
-          reject(new Error(err.message));
-        };
-
-        sendNext(worker);
-      }
+      this.resolveDone = resolve;
+      this.rejectDone = reject;
+      if (this.failure) reject(this.failure);
+      else if (this.completed === this.submitted) resolve();
     });
 
-    // Assemble final GIF
+    this.terminate();
+
+    // Assemble final GIF (frames are written in capture order).
     const gif = GIFEncoder();
     const delay = Math.round(1000 / fps);
 
-    for (let i = 0; i < totalFrames; i++) {
-      const frame = encoded[i]!;
+    for (let i = 0; i < this.totalAtFinish; i++) {
+      const frame = this.results[i];
+      if (!frame) continue;
       gif.writeFrame(frame.indexedPixels, width, height, {
         palette: frame.palette,
         delay,

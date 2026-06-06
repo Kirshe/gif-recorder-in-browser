@@ -62,12 +62,13 @@ export class FrameGrabber {
     if (this.video.readyState < 2) return;
 
     if (this.region) {
-      const track = (this.video.srcObject as MediaStream).getVideoTracks()[0];
-      const settings = track.getSettings();
-      const videoW = settings.width ?? this.video.videoWidth;
-      const videoH = settings.height ?? this.video.videoHeight;
-      const scaleX = this.video.videoWidth / videoW;
-      const scaleY = this.video.videoHeight / videoH;
+      // The region was captured in CSS pixels against the page viewport. Map it
+      // onto the captured video's device-pixel resolution using the viewport
+      // size recorded at selection time — this avoids double-counting DPR.
+      const viewportW = this.region.viewportW ?? this.video.videoWidth;
+      const viewportH = this.region.viewportH ?? this.video.videoHeight;
+      const scaleX = this.video.videoWidth / viewportW;
+      const scaleY = this.video.videoHeight / viewportH;
 
       this.ctx.drawImage(
         this.video,

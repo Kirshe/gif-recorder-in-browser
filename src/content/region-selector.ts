@@ -112,15 +112,17 @@
       return;
     }
 
-    // Convert to device pixels
-    const dpr = window.devicePixelRatio || 1;
+    // Send CSS-pixel geometry plus the current viewport size; the grabber maps
+    // these onto the captured video's device-pixel resolution.
     chrome.runtime.sendMessage({
       type: "REGION_SELECTED",
       region: {
-        x: Math.round(x * dpr),
-        y: Math.round(y * dpr),
-        w: Math.round(w * dpr),
-        h: Math.round(h * dpr),
+        x: Math.round(x),
+        y: Math.round(y),
+        w: Math.round(w),
+        h: Math.round(h),
+        viewportW: window.innerWidth,
+        viewportH: window.innerHeight,
       },
     });
   });

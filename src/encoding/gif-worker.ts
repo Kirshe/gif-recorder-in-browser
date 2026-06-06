@@ -19,6 +19,9 @@ export interface WorkerOutput {
 self.onmessage = (e: MessageEvent<WorkerInput>) => {
   const { rgba, width, height, index } = e.data;
 
+  // Each frame gets its own local color table. This is simpler and
+  // parallelizes cleanly across workers; the trade-off is slightly larger files
+  // (and occasional inter-frame shift) versus a single shared global palette.
   const palette = quantize(rgba, MAX_COLORS);
   const indexedPixels = applyPalette(rgba, palette);
 
