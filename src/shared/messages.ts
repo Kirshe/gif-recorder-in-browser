@@ -79,6 +79,12 @@ export type StopCapture = {
   type: "STOP_CAPTURE";
 };
 
+// Offscreen → Background (Chrome only): the offscreen document has loaded and
+// registered its message listener, so it's safe to send START_CAPTURE.
+export type OffscreenReady = {
+  type: "OFFSCREEN_READY";
+};
+
 // Offscreen → Background (Chrome only)
 export type CaptureGifReady = {
   type: "CAPTURE_GIF_READY";
@@ -107,5 +113,6 @@ export type Message =
   | RegionCancelled
   | StartCapture
   | StopCapture
+  | OffscreenReady
   | CaptureGifReady
   | CaptureEncodingProgress;

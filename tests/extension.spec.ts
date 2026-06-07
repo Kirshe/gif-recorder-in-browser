@@ -124,6 +124,40 @@ test("failed capture surfaces an error and returns to idle", async () => {
   await expect(page.locator("#view-recording")).toBeHidden();
 });
 
+test("stop with no capture in flight surfaces an error instead of hanging", async () => {
+  // Regression: if START_CAPTURE was dropped (e.g. it raced the offscreen
+  // document's listener registration), neither the grabber nor the encoder pool
+  // exists. A later STOP_CAPTURE must still report an ERROR so the popup recovers
+  // — previously it returned silently, leaving the popup stuck on "Encoding…".
+  const extensionId = await getExtensionId();
+  const base = `chrome-extension://${extensionId}`;
+
+  // Load the offscreen document as a page so its STOP_CAPTURE handler is live.
+  const offscreen = await context.newPage();
+  await offscreen.goto(`${base}/src/offscreen/offscreen.html`);
+
+  // A second extension page observes the runtime messages the offscreen broadcasts.
+  const observer = await context.newPage();
+  await observer.goto(`${base}/src/popup/index.html`);
+  await observer.evaluate(() => {
+    (window as any).__errors = [];
+    chrome.runtime.onMessage.addListener((msg: any) => {
+      if (msg?.type === "ERROR") (window as any).__errors.push(msg.message);
+    });
+  });
+
+  // Simulate Stop arriving with no capture in progress.
+  await observer.evaluate(() =>
+    chrome.runtime.sendMessage({ type: "STOP_CAPTURE" })
+  );
+
+  await expect
+    .poll(() => observer.evaluate(() => (window as any).__errors), {
+      timeout: 5000,
+    })
+    .toContain("Recording didn't start — please try again");
+});
+
 test("recording view markup has a Stop button and timer", async () => {
   const extensionId = await getExtensionId();
   const page = await context.newPage();

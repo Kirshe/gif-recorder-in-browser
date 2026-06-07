@@ -87,14 +87,41 @@ function clearBadge() {
   chrome.action.setBadgeText({ text: "" });
 }
 
+// Resolves when the offscreen document reports it has registered its message
+// listener (see OFFSCREEN_READY). Reset whenever we create a fresh document.
+let offscreenReady = false;
+let offscreenReadyWaiters: Array<() => void> = [];
+
+function markOffscreenReady(): void {
+  offscreenReady = true;
+  const waiters = offscreenReadyWaiters;
+  offscreenReadyWaiters = [];
+  for (const resolve of waiters) resolve();
+}
+
+function whenOffscreenReady(timeoutMs = 3000): Promise<void> {
+  if (offscreenReady) return Promise.resolve();
+  return new Promise<void>((resolve) => {
+    offscreenReadyWaiters.push(resolve);
+    // Fall back after a timeout so a missed READY can't hang recording forever;
+    // the worst case is the original race, which is no worse than before.
+    setTimeout(resolve, timeoutMs);
+  });
+}
+
 async function ensureOffscreenDocument(): Promise<void> {
   if (!isChrome) return;
 
   const contexts = await (chrome as any).offscreen.getContexts({
     contextTypes: ["OFFSCREEN_DOCUMENT"],
   });
-  if (contexts.length > 0) return;
+  if (contexts.length > 0) {
+    // Reusing a live document — its listener is already registered.
+    offscreenReady = true;
+    return;
+  }
 
+  offscreenReady = false;
   await (chrome as any).offscreen.createDocument({
     url: "src/offscreen/offscreen.html",
     reasons: ["USER_MEDIA"],
@@ -105,6 +132,7 @@ async function ensureOffscreenDocument(): Promise<void> {
 async function closeOffscreenDocument(): Promise<void> {
   if (!isChrome) return;
 
+  offscreenReady = false;
   try {
     await (chrome as any).offscreen.closeDocument();
   } catch {
@@ -129,6 +157,10 @@ async function handleMessage(
   _sender: chrome.runtime.MessageSender
 ): Promise<unknown> {
   switch (message.type) {
+    case "OFFSCREEN_READY":
+      markOffscreenReady();
+      return { ok: true };
+
     case "GET_STATE":
       return snapshot();
 
@@ -229,6 +261,10 @@ async function handleStartRecording(region?: Region): Promise<unknown> {
     }
 
     await ensureOffscreenDocument();
+    // Wait until the offscreen document's listener is live; otherwise this
+    // START_CAPTURE can be dropped and the recording silently never starts —
+    // which later leaves the popup stuck on the encoding view with no result.
+    await whenOffscreenReady();
 
     session = {
       state: "recording",
@@ -309,11 +345,30 @@ async function handleRegionSelected(region: Region): Promise<unknown> {
   return { ok: true };
 }
 
+// Firefox: the id of the dedicated recording window, so we can tell when the
+// user closes it (rather than clicking Stop) and tear down the recording.
+let recordingWindowId: number | null = null;
+
 async function openRecordingWindow(): Promise<void> {
-  await (chrome as any).windows.create({
+  const win = await (chrome as any).windows.create({
     url: chrome.runtime.getURL("src/recording/recording.html"),
     type: "popup",
     width: 360,
     height: 320,
+  });
+  recordingWindowId = win?.id ?? null;
+}
+
+// If the recording window is closed without stopping, the capture goes with it,
+// but the badge and session would otherwise stay stuck in "recording" — which
+// makes the toolbar popup show a still-running timer. Reconcile to idle.
+if (!isChrome) {
+  chrome.windows.onRemoved.addListener(async (windowId) => {
+    if (windowId !== recordingWindowId) return;
+    recordingWindowId = null;
+    clearBadge();
+    if (session.state === "recording" || session.state === "encoding") {
+      await resetSession();
+    }
   });
 }
