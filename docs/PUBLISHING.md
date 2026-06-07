@@ -72,13 +72,14 @@ Do these once before your first submission:
 4. **Privacy** tab — provide a single-purpose description, a justification for each
    requested permission, and the privacy policy URL:
 
-   | Permission   | Justification |
-   |--------------|---------------|
-   | `tabCapture` | Capture the active tab's video to encode into a GIF. |
-   | `offscreen`  | Run frame capture + encoding in a hidden offscreen document. |
-   | `activeTab`  | Operate on the tab the user is recording. |
-   | `scripting`  | Inject the region-selector overlay on demand. |
-   | `storage`    | Persist recording settings and in-progress state. |
+   | Permission             | Justification |
+   |------------------------|---------------|
+   | `tabCapture`           | Capture the active tab's video to encode into a GIF. |
+   | `offscreen`            | Run frame capture + encoding in a hidden offscreen document. |
+   | `activeTab`            | Operate on the tab the user is recording. |
+   | `scripting`            | Inject the region-selector overlay on demand. |
+   | `storage`              | Persist recording settings and in-progress state. |
+   | `http://*/*`, `https://*/*` (host) | Inject the region-selector overlay into the page being recorded; `activeTab` alone can't cover the background injection. |
 
 5. Submit for review. Turnaround is usually a few hours to a few days.
 

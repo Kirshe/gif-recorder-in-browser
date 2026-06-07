@@ -1,6 +1,8 @@
 import { test, expect, chromium, BrowserContext } from "@playwright/test";
 import path from "path";
 import { fileURLToPath } from "url";
+import http from "http";
+import type { AddressInfo } from "net";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const extensionPath = path.resolve(__dirname, "../dist/chrome");
@@ -156,6 +158,69 @@ test("stop with no capture in flight surfaces an error instead of hanging", asyn
       timeout: 5000,
     })
     .toContain("Recording didn't start — please try again");
+});
+
+test("region overlay injects into a web page and a drag clears it", async () => {
+  // Regression: region selection injects an overlay via scripting.executeScript.
+  // With only activeTab, that background injection was denied ("must request
+  // permission to access the host") on web pages, so ticking Select Region and
+  // clicking Start did nothing. host_permissions for http/https must make the
+  // overlay inject reliably; a valid drag then removes it (and emits
+  // REGION_SELECTED to the background).
+  const server = http.createServer((_req, res) => {
+    res.setHeader("Content-Type", "text/html");
+    res.end(
+      "<!doctype html><html><body style='height:2000px'><h1>page</h1></body></html>"
+    );
+  });
+  await new Promise<void>((r) => server.listen(0, r));
+  const port = (server.address() as AddressInfo).port;
+
+  let [bg] = context.serviceWorkers();
+  if (!bg) bg = await context.waitForEvent("serviceworker");
+
+  const page = await context.newPage();
+  await page.goto(`http://localhost:${port}/`);
+
+  // Inject exactly like the background's handleShowRegionSelector does.
+  const tabId = await bg.evaluate(async () => {
+    const [t] = await chrome.tabs.query({ active: true, currentWindow: true });
+    return t?.id;
+  });
+  const injectError = await bg.evaluate(async (id) => {
+    try {
+      await chrome.scripting.executeScript({
+        target: { tabId: id as number },
+        files: ["content/region-selector.js"],
+      });
+      return null;
+    } catch (e) {
+      return (e as Error).message;
+    }
+  }, tabId);
+  expect(injectError).toBeNull();
+
+  await page.waitForTimeout(200);
+  expect(
+    await page.evaluate(() => !!document.getElementById("gif-recorder-overlay"))
+  ).toBe(true);
+
+  // Drag a selection larger than the 10px threshold.
+  await page.mouse.move(100, 100);
+  await page.mouse.down();
+  await page.mouse.move(400, 350, { steps: 5 });
+  await page.mouse.up();
+  await page.waitForTimeout(300);
+
+  // A valid selection removes the overlay (and sends REGION_SELECTED).
+  expect(
+    await page.evaluate(() => !!document.getElementById("gif-recorder-overlay"))
+  ).toBe(false);
+
+  await page.close();
+  // Force-close keep-alive sockets so server.close() can actually resolve.
+  (server as unknown as { closeAllConnections?: () => void }).closeAllConnections?.();
+  await new Promise<void>((r) => server.close(() => r()));
 });
 
 test("recording view markup has a Stop button and timer", async () => {

@@ -144,8 +144,17 @@ btnStart.addEventListener("click", async () => {
     // Region selection happens on the page. Interacting with the page closes
     // this popup anyway, and the background drives the rest (Chrome: starts the
     // recording; Firefox: opens the recording window with the chosen region),
-    // so close now to let the user draw the rectangle.
-    await sendMessage({ type: "SHOW_REGION_SELECTOR" });
+    // so close to let the user draw the rectangle — but only once the overlay
+    // actually injected. On restricted pages (chrome://, the add-on store, the
+    // new-tab page) injection is denied; keep the popup open and show why,
+    // instead of silently closing and appearing to do nothing.
+    const res = (await sendMessage({ type: "SHOW_REGION_SELECTOR" })) as
+      | { error?: string }
+      | undefined;
+    if (res?.error) {
+      showError(res.error);
+      return;
+    }
     window.close();
     return;
   }
