@@ -96,7 +96,9 @@ export default defineConfig({
             type: "module",
           };
           manifest.browser_specific_settings = {
-            gecko: { id: "gif-recorder@example.com" },
+            gecko: {
+              id: process.env.FIREFOX_ADDON_ID || "gif-recorder@example.com",
+            },
           };
         }
 

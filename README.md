@@ -22,6 +22,11 @@ npm run build:firefox
 Build output goes to `dist/chrome/` or `dist/firefox/`. Each target gets its own
 manifest and bundle — **load the folder that matches your browser**.
 
+To package and submit the extension to the Chrome Web Store and Firefox Add-ons,
+see [docs/PUBLISHING.md](docs/PUBLISHING.md). The
+[`build-extensions`](.github/workflows/build-extensions.yml) GitHub Action builds
+and packages both targets automatically.
+
 ### Development (watch mode)
 
 ```bash
