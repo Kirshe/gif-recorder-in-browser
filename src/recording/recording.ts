@@ -85,9 +85,11 @@ function onGifReady(dataUrl: string, size: number) {
 }
 
 function onError(msg: string) {
-  showError(msg);
   stopTimer();
+  // showView() clears the error bar, so surface the message *after* switching
+  // back to idle — otherwise the error flashes and disappears instantly.
   showView("idle");
+  showError(msg);
 }
 
 async function startRecording() {

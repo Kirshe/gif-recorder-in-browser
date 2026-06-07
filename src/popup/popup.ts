@@ -152,13 +152,10 @@ btnStart.addEventListener("click", async () => {
 
   if (isFirefox) {
     // Open a dedicated window that survives the focus loss from
-    // getDisplayMedia(); it performs the capture.
-    await browser.windows.create({
-      url: browser.runtime.getURL("src/recording/recording.html"),
-      type: "popup",
-      width: 360,
-      height: 320,
-    });
+    // getDisplayMedia(); it performs the capture. The background opens it: this
+    // popup auto-closes the instant it loses focus, which would otherwise cancel
+    // a windows.create() call issued from here before the window appears.
+    await sendMessage({ type: "OPEN_RECORDING_WINDOW" });
     window.close();
     return;
   }

@@ -24,6 +24,13 @@ export type ResetSession = {
   type: "RESET";
 };
 
+// Popup → Background (Firefox only): open the dedicated recording window. The
+// background opens it because the action popup closes the moment it loses focus,
+// which can cancel a windows.create() issued from the popup itself.
+export type OpenRecordingWindow = {
+  type: "OPEN_RECORDING_WINDOW";
+};
+
 // Background → Popup
 export type RecordingStarted = {
   type: "RECORDING_STARTED";
@@ -90,6 +97,7 @@ export type Message =
   | ShowRegionSelector
   | GetState
   | ResetSession
+  | OpenRecordingWindow
   | RecordingStarted
   | RecordingStopped
   | EncodingProgress

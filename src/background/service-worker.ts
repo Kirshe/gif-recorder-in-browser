@@ -136,6 +136,16 @@ async function handleMessage(
       await resetSession();
       return { ok: true };
 
+    case "OPEN_RECORDING_WINDOW":
+      // Firefox, full-tab: no region, so clear any stale one and open the window.
+      try {
+        await chrome.storage.session.remove("pendingRegion");
+      } catch {
+        // ignore
+      }
+      await openRecordingWindow();
+      return { ok: true };
+
     case "START_RECORDING":
       return handleStartRecording(message.region);
 
