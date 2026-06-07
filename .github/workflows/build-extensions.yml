@@ -16,12 +16,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
-          node-version: 20
+          node-version: 24
           cache: npm
 
       - name: Install dependencies
@@ -49,13 +49,13 @@ jobs:
         run: cd dist/firefox && zip -r "../../gif-recorder-firefox-v${{ steps.version.outputs.version }}.zip" . && cd ../..
 
       - name: Upload Chrome artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: gif-recorder-chrome
           path: gif-recorder-chrome-v${{ steps.version.outputs.version }}.zip
 
       - name: Upload Firefox artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: gif-recorder-firefox
           path: gif-recorder-firefox-v${{ steps.version.outputs.version }}.zip
