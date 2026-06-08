@@ -79,6 +79,13 @@ export default defineConfig({
           permissions: isChrome
             ? ["tabCapture", "offscreen", "activeTab", "scripting", "storage"]
             : ["activeTab", "scripting", "storage"],
+          // Region selection injects an overlay into the current web page via
+          // scripting.executeScript. activeTab alone is unreliable here: the
+          // injection runs from the background after the popup closes, and the
+          // activeTab grant doesn't consistently cover it — so request host
+          // access to web pages outright. Restricted schemes (chrome://, about:,
+          // the add-on store) still can't be injected and are handled gracefully.
+          host_permissions: ["http://*/*", "https://*/*"],
           content_security_policy: {
             extension_pages: "script-src 'self'; object-src 'self'",
           },

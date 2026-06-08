@@ -79,6 +79,10 @@ export async function stopChromeCapture(
       onError(err instanceof Error ? err.message : "Encoding failed");
     }
     encoderPool = null;
+  } else {
+    // Stop arrived with no capture in flight — capture never started. Surface an
+    // error instead of leaving the popup stuck forever on the encoding view.
+    onError("Recording didn't start — please try again");
   }
 }
 

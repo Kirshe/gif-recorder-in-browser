@@ -36,3 +36,9 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
 
   return true;
 });
+
+// Tell the background the listener above is now registered. The background waits
+// for this before sending START_CAPTURE — otherwise a START_CAPTURE broadcast
+// the instant after createDocument() resolves can land before this script runs
+// and be lost, leaving the recording silently never started.
+chrome.runtime.sendMessage({ type: "OFFSCREEN_READY" }).catch(() => {});
