@@ -9,11 +9,13 @@ let autoStopTimer: number | null = null;
 let isStopping = false;
 
 export interface CaptureCallbacks {
-  // Fired once the user has picked a surface and capture is actually running.
-  // The player uses this to show the recording view and minimize itself out of
-  // the capture — done here (not before getDisplayMedia) so that cancelling the
+  // Fired once the user has picked a surface, before any frame is grabbed. The
+  // player uses this to show the recording view and minimize itself out of the
+  // capture — done here (not before getDisplayMedia) so that cancelling the
   // share picker leaves the player on screen instead of stranded + minimized.
-  onStart: () => void;
+  // Awaited so frame grabbing only begins after the window is fully minimized,
+  // keeping the minimize animation out of the recording.
+  onStart: () => void | Promise<void>;
   // Fired the moment a stop is triggered (manual, auto-stop, the keyboard
   // shortcut, or the browser's native "Stop sharing"), before encoding begins.
   // Lets the player restore itself on screen and switch to the encoding view.
@@ -58,8 +60,9 @@ export async function startCapture(
       track.addEventListener("ended", () => stopCapture(callbacks));
     });
 
-    // Surface + minimize the player now that the stream is live.
-    callbacks.onStart();
+    // Surface + minimize the player now that the stream is live, and wait for
+    // the minimize to settle before grabbing the first frame.
+    await callbacks.onStart();
 
     await grabber.start();
 

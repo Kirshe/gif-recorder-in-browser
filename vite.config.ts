@@ -71,9 +71,11 @@ export default defineConfig({
           // out of the capture.
           commands: {
             "stop-recording": {
+              // Alt+Shift+G to avoid clashes with built-ins (Ctrl+Shift+S is
+              // Firefox's screenshot tool).
               suggested_key: {
-                default: "Ctrl+Shift+S",
-                mac: "Command+Shift+S",
+                default: "Alt+Shift+G",
+                mac: "Alt+Shift+G",
               },
               description: "Stop the current GIF recording",
             },

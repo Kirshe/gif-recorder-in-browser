@@ -16,6 +16,14 @@ let playerWindowId: number | null = null;
 let targetTabId: number | null = null;
 let targetWindowId: number | null = null;
 
+// How long to wait after minimizing the player for the OS animation to finish,
+// so the first captured frame doesn't include the window sliding away.
+const MINIMIZE_SETTLE_MS = 350;
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 // ---------------------------------------------------------------------------
 // Badge
 // ---------------------------------------------------------------------------
@@ -132,6 +140,10 @@ async function handleMessage(message: Message): Promise<unknown> {
     case "START_RECORDING":
       setBadgeRecording();
       await minimizePlayer();
+      // Let the minimize animation finish before replying — the player waits on
+      // this reply to start grabbing frames, so the animation stays out of the
+      // recording.
+      await delay(MINIMIZE_SETTLE_MS);
       return { ok: true };
 
     case "STOP_RECORDING":

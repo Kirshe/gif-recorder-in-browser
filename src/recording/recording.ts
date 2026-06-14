@@ -16,7 +16,6 @@ const btnCopy = document.getElementById("btn-copy") as HTMLButtonElement;
 const btnNew = document.getElementById("btn-new") as HTMLButtonElement;
 
 const regionStatus = document.getElementById("region-status")!;
-const stopHint = document.getElementById("stop-hint");
 const timer = document.getElementById("timer")!;
 const progressFill = document.getElementById("progress-fill")!;
 const progressText = document.getElementById("progress-text")!;
@@ -32,10 +31,26 @@ let timerInterval: number | null = null;
 let gifDataUrl = "";
 let selectedRegion: Region | undefined;
 
-// Reflect the platform's modifier in the stop-shortcut hint.
-if (stopHint && navigator.platform.toLowerCase().includes("mac")) {
-  stopHint.textContent = "⌘⇧S";
+// Show the *actual* configured stop-recording shortcut (it may differ from the
+// suggested default if the user remapped it, or be unset). Reveal the hint copy
+// only when a shortcut is assigned.
+async function renderStopHint() {
+  let shortcut = "";
+  try {
+    const commands = await chrome.commands.getAll();
+    shortcut = commands.find((c) => c.name === "stop-recording")?.shortcut ?? "";
+  } catch {
+    // commands.getAll unavailable — leave the hint hidden.
+  }
+  if (!shortcut) return;
+  document.querySelectorAll<HTMLElement>(".stop-hint").forEach((el) => {
+    el.textContent = shortcut;
+  });
+  document.querySelectorAll(".needs-shortcut").forEach((el) => {
+    el.classList.remove("hidden");
+  });
 }
+void renderStopHint();
 
 function showView(newState: State) {
   state = newState;
@@ -122,12 +137,15 @@ function onError(msg: string) {
 }
 
 const captureCallbacks: CaptureCallbacks = {
-  // The stream is live: show the recording view and let the background minimize
-  // this window out of the capture and raise the REC badge.
-  onStart: () => {
+  // The stream is live: show the recording view and let the background raise the
+  // REC badge and minimize this window out of the capture. Await the reply so
+  // frame grabbing only begins once the minimize animation has settled.
+  onStart: async () => {
     showView("recording");
     startTimer();
-    chrome.runtime.sendMessage({ type: "START_RECORDING" }).catch(() => {});
+    await chrome.runtime
+      .sendMessage({ type: "START_RECORDING" })
+      .catch(() => {});
   },
   // Any stop path (button, shortcut, 30s auto-stop, native "Stop sharing").
   onStopBegin: () => {

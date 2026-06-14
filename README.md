@@ -68,7 +68,7 @@ Temporary add-ons are removed when Firefox restarts; just load it again.
    the browser prompts you.
 4. The player **minimizes itself** so it stays out of the recording. Stop any time
    with:
-   - the **`Ctrl+Shift+S`** (macOS **`⌘⇧S`**) keyboard shortcut, or
+   - the **`Alt+Shift+G`** keyboard shortcut, or
    - the browser's native **Stop sharing** control.
 
    (You can also restore the player window and click **Stop Recording**.)

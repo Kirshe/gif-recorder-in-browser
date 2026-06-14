@@ -16,6 +16,10 @@
         <button id="btn-region" class="btn btn-secondary">Select region…</button>
         <p id="region-status" class="region-status hidden"></p>
         <button id="btn-start" class="btn btn-primary">Start Recording</button>
+        <p class="meta needs-shortcut hidden">
+          Tip: once recording, stop any time with
+          <kbd class="stop-hint"></kbd>.
+        </p>
       </div>
 
       <!-- Recording View -->
@@ -25,8 +29,9 @@
           <span id="timer">00:00</span>
         </div>
         <p class="meta">
-          Recording in the background. Stop with the toolbar's “Stop sharing”
-          control or the <kbd id="stop-hint">Ctrl+Shift+S</kbd> shortcut.
+          Recording in the background. Stop with the browser's “Stop sharing”
+          control<span class="needs-shortcut hidden"> or
+          <kbd class="stop-hint"></kbd></span>.
         </p>
         <button id="btn-stop" class="btn btn-danger">Stop Recording</button>
       </div>
