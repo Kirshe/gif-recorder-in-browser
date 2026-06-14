@@ -1,4 +1,5 @@
-import { startFirefoxCapture, stopFirefoxCapture } from "../capture/capture-firefox.js";
+import { startCapture, stopCapture, type CaptureCallbacks } from "../capture/capture.js";
+import type { Message } from "../shared/messages.js";
 import type { Region } from "../shared/types.js";
 
 // Elements
@@ -7,13 +8,15 @@ const viewRecording = document.getElementById("view-recording")!;
 const viewEncoding = document.getElementById("view-encoding")!;
 const viewPreview = document.getElementById("view-preview")!;
 
+const btnRegion = document.getElementById("btn-region") as HTMLButtonElement;
 const btnStart = document.getElementById("btn-start") as HTMLButtonElement;
 const btnStop = document.getElementById("btn-stop") as HTMLButtonElement;
 const btnDownload = document.getElementById("btn-download") as HTMLButtonElement;
 const btnCopy = document.getElementById("btn-copy") as HTMLButtonElement;
 const btnNew = document.getElementById("btn-new") as HTMLButtonElement;
-const useRegion = document.getElementById("use-region") as HTMLInputElement;
 
+const regionStatus = document.getElementById("region-status")!;
+const stopHint = document.getElementById("stop-hint");
 const timer = document.getElementById("timer")!;
 const progressFill = document.getElementById("progress-fill")!;
 const progressText = document.getElementById("progress-text")!;
@@ -28,6 +31,11 @@ let recordingStartTime = 0;
 let timerInterval: number | null = null;
 let gifDataUrl = "";
 let selectedRegion: Region | undefined;
+
+// Reflect the platform's modifier in the stop-shortcut hint.
+if (stopHint && navigator.platform.toLowerCase().includes("mac")) {
+  stopHint.textContent = "⌘⇧S";
+}
 
 function showView(newState: State) {
   state = newState;
@@ -70,6 +78,24 @@ function formatBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+// --- Region ---------------------------------------------------------------
+function renderRegion() {
+  if (selectedRegion) {
+    regionStatus.textContent = `Region: ${selectedRegion.w}×${selectedRegion.h} — click to clear`;
+    regionStatus.classList.remove("hidden");
+    btnRegion.textContent = "Re-select region…";
+  } else {
+    regionStatus.classList.add("hidden");
+    btnRegion.textContent = "Select region…";
+  }
+}
+
+function clearRegion() {
+  selectedRegion = undefined;
+  renderRegion();
+}
+
+// --- Capture callbacks ----------------------------------------------------
 function onEncodingProgress(progress: number) {
   if (state !== "encoding") showView("encoding");
   const pct = Math.round(progress * 100);
@@ -86,54 +112,66 @@ function onGifReady(dataUrl: string, size: number) {
 
 function onError(msg: string) {
   stopTimer();
+  // The background restored + may have minimized this window; STOP_RECORDING
+  // also clears the badge if a recording was in flight.
+  chrome.runtime.sendMessage({ type: "STOP_RECORDING" }).catch(() => {});
   // showView() clears the error bar, so surface the message *after* switching
   // back to idle — otherwise the error flashes and disappears instantly.
   showView("idle");
   showError(msg);
 }
 
+const captureCallbacks: CaptureCallbacks = {
+  // The stream is live: show the recording view and let the background minimize
+  // this window out of the capture and raise the REC badge.
+  onStart: () => {
+    showView("recording");
+    startTimer();
+    chrome.runtime.sendMessage({ type: "START_RECORDING" }).catch(() => {});
+  },
+  // Any stop path (button, shortcut, 30s auto-stop, native "Stop sharing").
+  onStopBegin: () => {
+    stopTimer();
+    // Clears the badge and restores + focuses this window.
+    chrome.runtime.sendMessage({ type: "STOP_RECORDING" }).catch(() => {});
+    showView("encoding");
+    onEncodingProgress(0);
+  },
+  onProgress: onEncodingProgress,
+  onComplete: onGifReady,
+  onError,
+};
+
 async function startRecording() {
-  showView("recording");
-  startTimer();
-  // Let the background show the recording badge.
-  chrome.runtime.sendMessage({ type: "START_RECORDING" });
-  await startFirefoxCapture(selectedRegion, onEncodingProgress, onGifReady, onError);
+  // getDisplayMedia must run from this click's user gesture, so call it before
+  // touching any view — onStart() handles the UI once the stream is acquired.
+  await startCapture(selectedRegion, captureCallbacks);
 }
 
 async function doStop() {
-  stopTimer();
-  showView("encoding");
-  onEncodingProgress(0);
-  // Clear the badge in the background.
-  chrome.runtime.sendMessage({ type: "STOP_RECORDING" });
-  await stopFirefoxCapture(onEncodingProgress, onGifReady, onError);
+  await stopCapture(captureCallbacks);
 }
 
-// A region is chosen on the page from the popup, then handed to this window via
-// session storage. Reflect it here; the checkbox isn't interactive in this
-// context (the page overlay can't run from the recording window).
-useRegion.disabled = true;
-useRegion.title = "Choose a region from the toolbar popup before recording";
-
-async function loadPendingRegion() {
-  try {
-    const data = await chrome.storage.session.get("pendingRegion");
-    if (data.pendingRegion) {
-      selectedRegion = data.pendingRegion as Region;
-      useRegion.checked = true;
-      await chrome.storage.session.remove("pendingRegion");
-    }
-  } catch {
-    // No region available — full-tab capture.
+// --- Buttons --------------------------------------------------------------
+btnRegion.addEventListener("click", async () => {
+  if (selectedRegion) {
+    clearRegion();
+    return;
   }
-}
-
-btnStart.addEventListener("click", async () => {
-  await startRecording();
+  const res = (await chrome.runtime
+    .sendMessage({ type: "SHOW_REGION_SELECTOR" })
+    .catch(() => undefined)) as { error?: string } | undefined;
+  if (res?.error) showError(res.error);
 });
 
-btnStop.addEventListener("click", async () => {
-  await doStop();
+regionStatus.addEventListener("click", clearRegion);
+
+btnStart.addEventListener("click", () => {
+  void startRecording();
+});
+
+btnStop.addEventListener("click", () => {
+  void doStop();
 });
 
 function downloadGif() {
@@ -182,9 +220,22 @@ btnCopy.addEventListener("click", async () => {
 btnNew.addEventListener("click", () => {
   gifDataUrl = "";
   gifPreview.src = "";
-  selectedRegion = undefined;
-  useRegion.checked = false;
+  clearRegion();
   showView("idle");
 });
 
-void loadPendingRegion();
+// --- Messages from the background -----------------------------------------
+chrome.runtime.onMessage.addListener((message: Message) => {
+  switch (message.type) {
+    case "REGION_SELECTED":
+      selectedRegion = message.region;
+      renderRegion();
+      break;
+    case "REGION_CANCELLED":
+      showError("Region selection cancelled — recording the full surface.");
+      break;
+    case "STOP_REQUESTED":
+      if (state === "recording") void doStop();
+      break;
+  }
+});

@@ -14,8 +14,9 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const target = process.env.TARGET || "chrome";
 const isChrome = target === "chrome";
 
+// One flow for both browsers: the toolbar icon opens the pop-out player
+// (recording.html), which captures via getDisplayMedia and encodes the GIF.
 const input: Record<string, string> = {
-  "popup/popup": resolve(__dirname, "src/popup/index.html"),
   "background/service-worker": resolve(
     __dirname,
     "src/background/service-worker.ts"
@@ -24,19 +25,8 @@ const input: Record<string, string> = {
     __dirname,
     "src/content/region-selector.ts"
   ),
+  "recording/recording": resolve(__dirname, "src/recording/recording.html"),
 };
-
-if (isChrome) {
-  input["offscreen/offscreen"] = resolve(
-    __dirname,
-    "src/offscreen/offscreen.html"
-  );
-} else {
-  input["recording/recording"] = resolve(
-    __dirname,
-    "src/recording/recording.html"
-  );
-}
 
 export default defineConfig({
   base: "./",
@@ -72,19 +62,30 @@ export default defineConfig({
           version: manifestTemplate.version,
           description: manifestTemplate.description,
           icons: manifestTemplate.icons,
+          // No default_popup: clicking the toolbar icon fires action.onClicked
+          // in the background, which opens the pop-out player window.
           action: {
-            default_popup: "src/popup/index.html",
             default_icon: manifestTemplate.icons,
           },
-          permissions: isChrome
-            ? ["tabCapture", "offscreen", "activeTab", "scripting", "storage"]
-            : ["activeTab", "scripting", "storage"],
+          // A global shortcut to stop recording while the player is minimized
+          // out of the capture.
+          commands: {
+            "stop-recording": {
+              suggested_key: {
+                default: "Ctrl+Shift+S",
+                mac: "Command+Shift+S",
+              },
+              description: "Stop the current GIF recording",
+            },
+          },
+          permissions: ["activeTab", "scripting"],
           // Region selection injects an overlay into the current web page via
           // scripting.executeScript. activeTab alone is unreliable here: the
-          // injection runs from the background after the popup closes, and the
-          // activeTab grant doesn't consistently cover it — so request host
-          // access to web pages outright. Restricted schemes (chrome://, about:,
-          // the add-on store) still can't be injected and are handled gracefully.
+          // injection runs from the background while the player window is
+          // focused, and the activeTab grant doesn't consistently cover it — so
+          // request host access to web pages outright. Restricted schemes
+          // (chrome://, about:, the add-on store) still can't be injected and
+          // are handled gracefully.
           host_permissions: ["http://*/*", "https://*/*"],
           content_security_policy: {
             extension_pages: "script-src 'self'; object-src 'self'",

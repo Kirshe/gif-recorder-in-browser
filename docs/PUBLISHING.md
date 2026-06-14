@@ -56,8 +56,8 @@ Do these once before your first submission:
 - [ ] **Version bump** — both stores reject re-uploads of an existing version, so
       increment `version` in `manifest.json` for every release.
 - [ ] **Privacy policy URL** — required by Chrome because the extension captures
-      tab/screen content via `tabCapture` / `getDisplayMedia()`. State whether any
-      data leaves the device (it doesn't — encoding is fully local).
+      screen/window/tab content via `getDisplayMedia()`. State whether any data
+      leaves the device (it doesn't — encoding is fully local).
 - [ ] **Store assets** — a 128×128 icon (already in `icons/`) and at least one
       screenshot (Chrome: 1280×800 or 640×400).
 - [ ] **Smoke test the builds** unpacked (see README "Load the Extension").
@@ -74,12 +74,12 @@ Do these once before your first submission:
 
    | Permission             | Justification |
    |------------------------|---------------|
-   | `tabCapture`           | Capture the active tab's video to encode into a GIF. |
-   | `offscreen`            | Run frame capture + encoding in a hidden offscreen document. |
-   | `activeTab`            | Operate on the tab the user is recording. |
+   | `activeTab`            | Operate on the tab the user selects a region on. |
    | `scripting`            | Inject the region-selector overlay on demand. |
-   | `storage`              | Persist recording settings and in-progress state. |
    | `http://*/*`, `https://*/*` (host) | Inject the region-selector overlay into the page being recorded; `activeTab` alone can't cover the background injection. |
+
+   The screen/window/tab capture itself uses `getDisplayMedia()`, which prompts
+   the user at record time and needs no manifest permission.
 
 5. Submit for review. Turnaround is usually a few hours to a few days.
 

@@ -1,227 +1,157 @@
 import type { Message } from "../shared/messages.js";
-import type { Region, RecordingState, SessionSnapshot } from "../shared/types.js";
-
-declare const __BROWSER__: "chrome" | "firefox";
-
-const isChrome = __BROWSER__ === "chrome";
 
 // ---------------------------------------------------------------------------
-// Recording state lives here (not in the transient popup) so a recording — and
-// its result — survive the popup closing or the service worker restarting.
-// ---------------------------------------------------------------------------
-interface Session {
-  state: RecordingState;
-  recordingStartTime?: number;
-  progress: number;
-  gifDataUrl?: string;
-  size?: number;
-  error?: string;
-  region?: Region;
-}
-
-let session: Session = { state: "idle", progress: 0 };
-
-async function saveSession(): Promise<void> {
-  try {
-    await chrome.storage.session.set({ session });
-  } catch {
-    // Quota exceeded (large GIF data URL) or unavailable — the in-memory copy
-    // still serves the common case where the worker stays alive.
-  }
-}
-
-function snapshot(): SessionSnapshot {
-  return {
-    state: session.state,
-    recordingStartTime: session.recordingStartTime,
-    progress: session.progress,
-    gifDataUrl: session.gifDataUrl,
-    size: session.size,
-    error: session.error,
-  };
-}
-
-async function resetSession(): Promise<void> {
-  session = { state: "idle", progress: 0 };
-  await saveSession();
-}
-
-// Rehydrate after a service-worker restart, then reconcile against reality.
-async function rehydrate(): Promise<void> {
-  try {
-    const data = await chrome.storage.session.get("session");
-    if (data.session) session = data.session as Session;
-  } catch {
-    return;
-  }
-
-  // If we think we're recording but the offscreen document is gone, the
-  // recording was lost when the worker died — fall back to idle.
-  if (isChrome && (session.state === "recording" || session.state === "encoding")) {
-    const ctx = await (chrome as any).offscreen
-      .getContexts({ contextTypes: ["OFFSCREEN_DOCUMENT"] })
-      .catch(() => []);
-    if (!ctx.length) await resetSession();
-  }
-  // A "preview" state with no retained data URL is unusable.
-  if (session.state === "preview" && !session.gifDataUrl) await resetSession();
-}
-void rehydrate();
-
-// ---------------------------------------------------------------------------
-// Helpers
+// The recording lives entirely in the pop-out player window (recording.html):
+// it acquires the getDisplayMedia stream, grabs frames, and encodes the GIF.
+// The background's job is narrow — open/focus that window, track the page the
+// user wants to region-select on, relay the stop shortcut, and toggle the badge
+// + minimize the player out of a full-screen capture.
 // ---------------------------------------------------------------------------
 
-// Best-effort message to the popup. The popup is frequently closed, which makes
-// sendMessage reject with "Could not establish connection" — swallow it.
-function notifyPopup(message: Message): void {
-  chrome.runtime.sendMessage(message).catch(() => {});
-}
+// The pop-out player window.
+let playerWindowId: number | null = null;
 
-function setBadgeRecording() {
+// The tab the user launched the recorder from, used as the region-selection
+// target (the player window itself is a popup and must be skipped).
+let targetTabId: number | null = null;
+let targetWindowId: number | null = null;
+
+// ---------------------------------------------------------------------------
+// Badge
+// ---------------------------------------------------------------------------
+function setBadgeRecording(): void {
   chrome.action.setBadgeText({ text: "REC" });
   chrome.action.setBadgeBackgroundColor({ color: "#e53e3e" });
 }
 
-function clearBadge() {
+function clearBadge(): void {
   chrome.action.setBadgeText({ text: "" });
 }
 
-// Resolves when the offscreen document reports it has registered its message
-// listener (see OFFSCREEN_READY). Reset whenever we create a fresh document.
-let offscreenReady = false;
-let offscreenReadyWaiters: Array<() => void> = [];
-
-function markOffscreenReady(): void {
-  offscreenReady = true;
-  const waiters = offscreenReadyWaiters;
-  offscreenReadyWaiters = [];
-  for (const resolve of waiters) resolve();
-}
-
-function whenOffscreenReady(timeoutMs = 3000): Promise<void> {
-  if (offscreenReady) return Promise.resolve();
-  return new Promise<void>((resolve) => {
-    offscreenReadyWaiters.push(resolve);
-    // Fall back after a timeout so a missed READY can't hang recording forever;
-    // the worst case is the original race, which is no worse than before.
-    setTimeout(resolve, timeoutMs);
-  });
-}
-
-async function ensureOffscreenDocument(): Promise<void> {
-  if (!isChrome) return;
-
-  const contexts = await (chrome as any).offscreen.getContexts({
-    contextTypes: ["OFFSCREEN_DOCUMENT"],
-  });
-  if (contexts.length > 0) {
-    // Reusing a live document — its listener is already registered.
-    offscreenReady = true;
-    return;
+// ---------------------------------------------------------------------------
+// Player window
+// ---------------------------------------------------------------------------
+async function openPlayer(): Promise<void> {
+  if (playerWindowId !== null) {
+    try {
+      await chrome.windows.update(playerWindowId, {
+        focused: true,
+        state: "normal",
+      });
+      return;
+    } catch {
+      // The stored window is gone; fall through and create a fresh one.
+      playerWindowId = null;
+    }
   }
 
-  offscreenReady = false;
-  await (chrome as any).offscreen.createDocument({
-    url: "src/offscreen/offscreen.html",
-    reasons: ["USER_MEDIA"],
-    justification: "Recording tab capture stream and encoding GIF",
+  const win = await chrome.windows.create({
+    url: chrome.runtime.getURL("src/recording/recording.html"),
+    type: "popup",
+    width: 380,
+    height: 380,
   });
+  playerWindowId = win?.id ?? null;
 }
 
-async function closeOffscreenDocument(): Promise<void> {
-  if (!isChrome) return;
-
-  offscreenReady = false;
+async function minimizePlayer(): Promise<void> {
+  if (playerWindowId === null) return;
   try {
-    await (chrome as any).offscreen.closeDocument();
+    await chrome.windows.update(playerWindowId, { state: "minimized" });
   } catch {
-    // Already closed
+    // Non-fatal: the player just stays visible and may appear in the capture.
   }
 }
+
+async function restorePlayer(): Promise<void> {
+  if (playerWindowId === null) return;
+  try {
+    await chrome.windows.update(playerWindowId, {
+      state: "normal",
+      focused: true,
+    });
+  } catch {
+    // Non-fatal: the user can restore the window manually.
+  }
+}
+
+async function focusPlayer(): Promise<void> {
+  if (playerWindowId === null) return;
+  try {
+    await chrome.windows.update(playerWindowId, { focused: true });
+  } catch {
+    // Non-fatal.
+  }
+}
+
+// Best-effort message to the player window.
+function notifyPlayer(message: Message): void {
+  chrome.runtime.sendMessage(message).catch(() => {});
+}
+
+// ---------------------------------------------------------------------------
+// Entry points: toolbar icon + keyboard shortcut
+// ---------------------------------------------------------------------------
+chrome.action.onClicked.addListener(async (tab) => {
+  // Remember where the user came from so region selection targets their page,
+  // not the player popup we're about to open/focus.
+  if (tab?.id != null) {
+    targetTabId = tab.id;
+    targetWindowId = tab.windowId ?? null;
+  }
+  await openPlayer();
+});
+
+chrome.commands.onCommand.addListener((command) => {
+  if (command === "stop-recording") {
+    // The player is minimized mid-recording, so route the stop to it directly.
+    notifyPlayer({ type: "STOP_REQUESTED" });
+  }
+});
+
+// If the player window is closed (rather than stopping cleanly), the capture
+// goes with it — clear the badge and forget the window.
+chrome.windows.onRemoved.addListener((windowId) => {
+  if (windowId !== playerWindowId) return;
+  playerWindowId = null;
+  clearBadge();
+});
 
 // ---------------------------------------------------------------------------
 // Message routing
 // ---------------------------------------------------------------------------
-chrome.runtime.onMessage.addListener((message: Message, sender, sendResponse) => {
-  handleMessage(message, sender)
+chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) => {
+  handleMessage(message)
     .then(sendResponse)
-    .catch((err) => {
-      sendResponse({ error: err.message });
-    });
+    .catch((err) => sendResponse({ error: err.message }));
   return true;
 });
 
-async function handleMessage(
-  message: Message,
-  _sender: chrome.runtime.MessageSender
-): Promise<unknown> {
+async function handleMessage(message: Message): Promise<unknown> {
   switch (message.type) {
-    case "OFFSCREEN_READY":
-      markOffscreenReady();
-      return { ok: true };
-
-    case "GET_STATE":
-      return snapshot();
-
-    case "RESET":
-      await resetSession();
-      return { ok: true };
-
-    case "OPEN_RECORDING_WINDOW":
-      // Firefox, full-tab: no region, so clear any stale one and open the window.
-      try {
-        await chrome.storage.session.remove("pendingRegion");
-      } catch {
-        // ignore
-      }
-      await openRecordingWindow();
-      return { ok: true };
-
     case "START_RECORDING":
-      return handleStartRecording(message.region);
+      setBadgeRecording();
+      await minimizePlayer();
+      return { ok: true };
 
     case "STOP_RECORDING":
-      return handleStopRecording();
+      clearBadge();
+      await restorePlayer();
+      return { ok: true };
 
     case "SHOW_REGION_SELECTOR":
       return handleShowRegionSelector();
 
     case "REGION_SELECTED":
-      return handleRegionSelected(message.region);
+      // From the content script: hand the region to the player and bring it
+      // back to the front so the user can start recording.
+      notifyPlayer(message);
+      await focusPlayer();
+      return { ok: true };
 
     case "REGION_CANCELLED":
-      // Selection aborted by the user — return to idle.
-      if (session.state === "selecting-region") await resetSession();
-      notifyPopup(message);
-      return { ok: true };
-
-    // Chrome: offscreen reports the finished GIF
-    case "CAPTURE_GIF_READY":
-      session.state = "preview";
-      session.gifDataUrl = message.dataUrl;
-      session.size = message.size;
-      session.error = undefined;
-      await saveSession();
-      notifyPopup({ type: "GIF_READY", dataUrl: message.dataUrl, size: message.size });
-      clearBadge();
-      await closeOffscreenDocument();
-      return { ok: true };
-
-    case "CAPTURE_ENCODING_PROGRESS":
-      session.state = "encoding";
-      session.progress = message.progress;
-      await saveSession();
-      notifyPopup({ type: "ENCODING_PROGRESS", progress: message.progress });
-      return { ok: true };
-
-    case "ERROR":
-      session.state = "idle";
-      session.error = message.message;
-      await saveSession();
-      notifyPopup(message);
-      clearBadge();
-      await closeOffscreenDocument();
+      notifyPlayer(message);
+      await focusPlayer();
       return { ok: true };
 
     default:
@@ -229,78 +159,11 @@ async function handleMessage(
   }
 }
 
-async function handleStartRecording(region?: Region): Promise<unknown> {
-  if (session.state === "recording") return { error: "Already recording" };
-
-  if (isChrome) {
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (!tab?.id) {
-      return { error: "No active tab" };
-    }
-
-    let streamId: string;
-    try {
-      streamId = await new Promise<string>((resolve, reject) => {
-        (chrome as any).tabCapture.getMediaStreamId(
-          { targetTabId: tab.id },
-          (id: string) => {
-            if (chrome.runtime.lastError) {
-              reject(new Error(chrome.runtime.lastError.message));
-            } else {
-              resolve(id);
-            }
-          }
-        );
-      });
-    } catch (err) {
-      session.state = "idle";
-      session.error = err instanceof Error ? err.message : "Capture failed";
-      await saveSession();
-      notifyPopup({ type: "ERROR", message: session.error });
-      return { error: session.error };
-    }
-
-    await ensureOffscreenDocument();
-    // Wait until the offscreen document's listener is live; otherwise this
-    // START_CAPTURE can be dropped and the recording silently never starts —
-    // which later leaves the popup stuck on the encoding view with no result.
-    await whenOffscreenReady();
-
-    session = {
-      state: "recording",
-      progress: 0,
-      recordingStartTime: Date.now(),
-      region,
-    };
-    setBadgeRecording();
-    await saveSession();
-
-    notifyPopup({ type: "START_CAPTURE", streamId, region });
-    return { type: "RECORDING_STARTED", recordingStartTime: session.recordingStartTime };
-  } else {
-    // Firefox: capture is performed by the recording window. This path is hit
-    // when that window tells us recording began, so we just track the badge.
-    session = { state: "recording", progress: 0, recordingStartTime: Date.now() };
-    setBadgeRecording();
-    await saveSession();
-    return { type: "RECORDING_STARTED" };
-  }
-}
-
-async function handleStopRecording(): Promise<unknown> {
-  if (isChrome) {
-    notifyPopup({ type: "STOP_CAPTURE" });
-    // Badge clears when CAPTURE_GIF_READY arrives.
-  } else {
-    // Firefox: recording window handles the stop; just clear the badge.
-    clearBadge();
-  }
-  return { type: "RECORDING_STOPPED" };
-}
-
 async function handleShowRegionSelector(): Promise<unknown> {
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (!tab?.id) return { error: "No active tab" };
+  const tab = await resolveTargetTab();
+  if (!tab?.id) {
+    return { error: "Open a normal browser tab first, then select a region." };
+  }
 
   try {
     await chrome.scripting.executeScript({
@@ -308,67 +171,42 @@ async function handleShowRegionSelector(): Promise<unknown> {
       files: ["content/region-selector.js"],
     });
   } catch (err) {
-    // e.g. chrome:// pages, the Web Store, the PDF viewer — injection is denied.
+    // e.g. chrome:// pages, the add-on store, the PDF viewer — injection denied.
     const msg =
       err instanceof Error
         ? `Can't select a region on this page (${err.message})`
         : "Can't select a region on this page";
-    session.state = "idle";
-    session.error = msg;
-    await saveSession();
-    notifyPopup({ type: "ERROR", message: msg });
     return { error: msg };
   }
 
-  session.state = "selecting-region";
-  await saveSession();
-  return { ok: true };
-}
-
-async function handleRegionSelected(region: Region): Promise<unknown> {
-  notifyPopup({ type: "REGION_SELECTED", region });
-
-  if (isChrome) {
-    // Drive the recording from here — the popup has almost certainly closed
-    // because the user clicked into the page to drag the selection.
-    return handleStartRecording(region);
-  }
-
-  // Firefox: stash the region for the recording window and open it. The window
-  // provides the user gesture getDisplayMedia() needs.
-  try {
-    await chrome.storage.session.set({ pendingRegion: region });
-  } catch {
-    // If we can't persist it, the window will fall back to full-tab capture.
-  }
-  await openRecordingWindow();
-  return { ok: true };
-}
-
-// Firefox: the id of the dedicated recording window, so we can tell when the
-// user closes it (rather than clicking Stop) and tear down the recording.
-let recordingWindowId: number | null = null;
-
-async function openRecordingWindow(): Promise<void> {
-  const win = await (chrome as any).windows.create({
-    url: chrome.runtime.getURL("src/recording/recording.html"),
-    type: "popup",
-    width: 360,
-    height: 320,
-  });
-  recordingWindowId = win?.id ?? null;
-}
-
-// If the recording window is closed without stopping, the capture goes with it,
-// but the badge and session would otherwise stay stuck in "recording" — which
-// makes the toolbar popup show a still-running timer. Reconcile to idle.
-if (!isChrome) {
-  chrome.windows.onRemoved.addListener(async (windowId) => {
-    if (windowId !== recordingWindowId) return;
-    recordingWindowId = null;
-    clearBadge();
-    if (session.state === "recording" || session.state === "encoding") {
-      await resetSession();
+  // Bring the user's page to the front so they can draw the rectangle (the
+  // player will be re-focused once REGION_SELECTED comes back).
+  if (tab.windowId != null) {
+    try {
+      await chrome.windows.update(tab.windowId, { focused: true });
+    } catch {
+      // Non-fatal.
     }
-  });
+  }
+  return { ok: true };
+}
+
+// Resolve the page to inject the region overlay into: prefer the tab the user
+// launched from, else the active tab of a normal (non-popup) window.
+async function resolveTargetTab(): Promise<chrome.tabs.Tab | undefined> {
+  if (targetTabId != null) {
+    try {
+      const tab = await chrome.tabs.get(targetTabId);
+      if (tab) return tab;
+    } catch {
+      // The remembered tab was closed; fall back to a live lookup.
+    }
+  }
+
+  const tabs = await chrome.tabs.query({ active: true, windowType: "normal" });
+  if (targetWindowId != null) {
+    const match = tabs.find((t) => t.windowId === targetWindowId);
+    if (match) return match;
+  }
+  return tabs[0];
 }

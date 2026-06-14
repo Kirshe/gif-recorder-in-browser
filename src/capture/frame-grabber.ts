@@ -5,7 +5,7 @@ export class FrameGrabber {
   private video: HTMLVideoElement;
   private canvas: OffscreenCanvas;
   private ctx: OffscreenCanvasRenderingContext2D;
-  private intervalId: number | null = null;
+  private clock: Worker | null = null;
   private frameIndex = 0;
   private onFrame: (frame: CapturedFrame) => void;
   private region?: Region;
@@ -42,15 +42,21 @@ export class FrameGrabber {
   async start(): Promise<void> {
     await this.video.play();
 
-    this.intervalId = window.setInterval(() => {
-      this.captureFrame();
-    }, FRAME_INTERVAL);
+    // Drive frame capture from a worker timer. A plain setInterval here would be
+    // throttled to ~1fps once the recording window is minimized out of the screen
+    // capture; the worker's clock keeps ticking at full rate.
+    this.clock = new Worker(new URL("./clock-worker.ts", import.meta.url), {
+      type: "module",
+    });
+    this.clock.onmessage = () => this.captureFrame();
+    this.clock.postMessage({ type: "start", interval: FRAME_INTERVAL });
   }
 
   stop(): void {
-    if (this.intervalId !== null) {
-      clearInterval(this.intervalId);
-      this.intervalId = null;
+    if (this.clock !== null) {
+      this.clock.postMessage({ type: "stop" });
+      this.clock.terminate();
+      this.clock = null;
     }
     this.video.pause();
     const stream = this.video.srcObject as MediaStream;

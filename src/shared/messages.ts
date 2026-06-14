@@ -1,118 +1,44 @@
 import type { Region } from "./types.js";
 
-// Popup → Background
+// Player → Background: capture started — show the REC badge and minimize the
+// player window out of a full-screen capture.
 export type StartRecording = {
   type: "START_RECORDING";
-  region?: Region;
 };
 
+// Player → Background: recording stopped — clear the badge and restore the
+// player window so the user sees the encoding progress and the finished GIF.
 export type StopRecording = {
   type: "STOP_RECORDING";
 };
 
+// Player → Background: inject the region-selection overlay into the user's
+// active page.
 export type ShowRegionSelector = {
   type: "SHOW_REGION_SELECTOR";
 };
 
-// Popup → Background: ask for the current recording state (popup re-open)
-export type GetState = {
-  type: "GET_STATE";
-};
-
-// Popup → Background: discard the current result and return to idle
-export type ResetSession = {
-  type: "RESET";
-};
-
-// Popup → Background (Firefox only): open the dedicated recording window. The
-// background opens it because the action popup closes the moment it loses focus,
-// which can cancel a windows.create() issued from the popup itself.
-export type OpenRecordingWindow = {
-  type: "OPEN_RECORDING_WINDOW";
-};
-
-// Background → Popup
-export type RecordingStarted = {
-  type: "RECORDING_STARTED";
-  streamId?: string; // Chrome only
-  recordingStartTime?: number;
-};
-
-export type RecordingStopped = {
-  type: "RECORDING_STOPPED";
-};
-
-export type EncodingProgress = {
-  type: "ENCODING_PROGRESS";
-  progress: number; // 0-1
-};
-
-export type GifReady = {
-  type: "GIF_READY";
-  dataUrl: string;
-  size: number;
-};
-
-export type ErrorOccurred = {
-  type: "ERROR";
-  message: string;
-};
-
-// Content Script → Background
+// Content script → Background → Player: the user finished drawing a region.
 export type RegionSelected = {
   type: "REGION_SELECTED";
   region: Region;
 };
 
+// Content script → Background → Player: the user aborted region selection.
 export type RegionCancelled = {
   type: "REGION_CANCELLED";
 };
 
-// Background → Offscreen (Chrome only)
-export type StartCapture = {
-  type: "START_CAPTURE";
-  streamId: string;
-  region?: Region;
-};
-
-export type StopCapture = {
-  type: "STOP_CAPTURE";
-};
-
-// Offscreen → Background (Chrome only): the offscreen document has loaded and
-// registered its message listener, so it's safe to send START_CAPTURE.
-export type OffscreenReady = {
-  type: "OFFSCREEN_READY";
-};
-
-// Offscreen → Background (Chrome only)
-export type CaptureGifReady = {
-  type: "CAPTURE_GIF_READY";
-  dataUrl: string;
-  size: number;
-};
-
-export type CaptureEncodingProgress = {
-  type: "CAPTURE_ENCODING_PROGRESS";
-  progress: number;
+// Background → Player: the stop-recording keyboard command fired (the player is
+// minimized, so its own Stop button isn't reachable).
+export type StopRequested = {
+  type: "STOP_REQUESTED";
 };
 
 export type Message =
   | StartRecording
   | StopRecording
   | ShowRegionSelector
-  | GetState
-  | ResetSession
-  | OpenRecordingWindow
-  | RecordingStarted
-  | RecordingStopped
-  | EncodingProgress
-  | GifReady
-  | ErrorOccurred
   | RegionSelected
   | RegionCancelled
-  | StartCapture
-  | StopCapture
-  | OffscreenReady
-  | CaptureGifReady
-  | CaptureEncodingProgress;
+  | StopRequested;

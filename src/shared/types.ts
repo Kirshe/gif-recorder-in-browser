@@ -10,18 +10,8 @@ export interface Region {
   viewportH?: number;
 }
 
-export type RecordingState = "idle" | "selecting-region" | "recording" | "encoding" | "preview";
-
-// Snapshot of the background's recording state, returned to the popup on open
-// so it can re-render correctly even if it was closed mid-recording.
-export interface SessionSnapshot {
-  state: RecordingState;
-  recordingStartTime?: number;
-  progress?: number;
-  gifDataUrl?: string;
-  size?: number;
-  error?: string;
-}
+// The player's view, also used as a coarse recording state.
+export type RecordingState = "idle" | "recording" | "encoding" | "preview";
 
 export interface CapturedFrame {
   data: Uint8ClampedArray;

@@ -38,12 +38,15 @@ async function getExtensionId(): Promise<string> {
   return extensionId;
 }
 
-test("popup shows idle view by default", async () => {
-  const extensionId = await getExtensionId();
-  const popupUrl = `chrome-extension://${extensionId}/src/popup/index.html`;
+// The single pop-out player drives every browser now; load it directly.
+function playerUrl(extensionId: string): string {
+  return `chrome-extension://${extensionId}/src/recording/recording.html`;
+}
 
+test("player shows idle view by default", async () => {
+  const extensionId = await getExtensionId();
   const page = await context.newPage();
-  await page.goto(popupUrl);
+  await page.goto(playerUrl(extensionId));
 
   // Idle view should be visible
   await expect(page.locator("#view-idle")).toBeVisible();
@@ -54,41 +57,32 @@ test("popup shows idle view by default", async () => {
   await expect(page.locator("#view-preview")).toBeHidden();
 });
 
-test("popup has Start Recording button", async () => {
+test("player has Start Recording button", async () => {
   const extensionId = await getExtensionId();
   const page = await context.newPage();
-  await page.goto(`chrome-extension://${extensionId}/src/popup/index.html`);
+  await page.goto(playerUrl(extensionId));
 
   const btn = page.locator("#btn-start");
   await expect(btn).toBeVisible();
   await expect(btn).toHaveText("Start Recording");
 });
 
-test("popup has Select Region checkbox unchecked by default", async () => {
+test("player has a Select region button", async () => {
   const extensionId = await getExtensionId();
   const page = await context.newPage();
-  await page.goto(`chrome-extension://${extensionId}/src/popup/index.html`);
+  await page.goto(playerUrl(extensionId));
 
-  const checkbox = page.locator("#use-region");
-  await expect(checkbox).not.toBeChecked();
+  const btn = page.locator("#btn-region");
+  await expect(btn).toBeVisible();
+  await expect(btn).toHaveText("Select region…");
+  // No region chosen yet, so the status line stays hidden.
+  await expect(page.locator("#region-status")).toBeHidden();
 });
 
-test("popup region checkbox can be toggled", async () => {
+test("player title is GIF Recorder", async () => {
   const extensionId = await getExtensionId();
   const page = await context.newPage();
-  await page.goto(`chrome-extension://${extensionId}/src/popup/index.html`);
-
-  const checkbox = page.locator("#use-region");
-  await checkbox.check();
-  await expect(checkbox).toBeChecked();
-  await checkbox.uncheck();
-  await expect(checkbox).not.toBeChecked();
-});
-
-test("popup title is GIF Recorder", async () => {
-  const extensionId = await getExtensionId();
-  const page = await context.newPage();
-  await page.goto(`chrome-extension://${extensionId}/src/popup/index.html`);
+  await page.goto(playerUrl(extensionId));
 
   await expect(page.locator("h1")).toHaveText("GIF Recorder");
 });
@@ -96,76 +90,48 @@ test("popup title is GIF Recorder", async () => {
 test("error bar is hidden by default", async () => {
   const extensionId = await getExtensionId();
   const page = await context.newPage();
-  await page.goto(`chrome-extension://${extensionId}/src/popup/index.html`);
+  await page.goto(playerUrl(extensionId));
 
   await expect(page.locator("#error-bar")).toBeHidden();
 });
 
-test("clicking Start Recording optimistically shows the recording view", async () => {
+test("recording view markup has a Stop button and timer", async () => {
   const extensionId = await getExtensionId();
   const page = await context.newPage();
-  await page.goto(`chrome-extension://${extensionId}/src/popup/index.html`);
+  await page.goto(playerUrl(extensionId));
 
-  // The popup switches to the recording view immediately (before the background
-  // round-trip), so the timer is wired up synchronously on click.
-  await page.locator("#btn-start").click();
+  // Verify the recording view is wired up without depending on a live capture.
+  await expect(page.locator("#btn-stop")).toHaveCount(1);
   await expect(page.locator("#timer")).toHaveText("00:00");
 });
 
-test("failed capture surfaces an error and returns to idle", async () => {
+test("REGION_SELECTED from the background updates the player's region status", async () => {
+  // The background relays the chosen region to the player as a runtime message;
+  // the player should reflect it in the idle view's status line. A page's own
+  // sendMessage doesn't reach its own listener, so broadcast from the worker.
   const extensionId = await getExtensionId();
   const page = await context.newPage();
-  await page.goto(`chrome-extension://${extensionId}/src/popup/index.html`);
-
-  // There's no capturable tab in this harness, so the background reports an
-  // error; the popup must surface it and fall back to idle rather than getting
-  // stuck on the recording view.
-  await page.locator("#btn-start").click();
-  await expect(page.locator("#error-bar")).toBeVisible({ timeout: 5000 });
+  await page.goto(playerUrl(extensionId));
   await expect(page.locator("#view-idle")).toBeVisible();
-  await expect(page.locator("#view-recording")).toBeHidden();
-});
 
-test("stop with no capture in flight surfaces an error instead of hanging", async () => {
-  // Regression: if START_CAPTURE was dropped (e.g. it raced the offscreen
-  // document's listener registration), neither the grabber nor the encoder pool
-  // exists. A later STOP_CAPTURE must still report an ERROR so the popup recovers
-  // — previously it returned silently, leaving the popup stuck on "Encoding…".
-  const extensionId = await getExtensionId();
-  const base = `chrome-extension://${extensionId}`;
+  let [bg] = context.serviceWorkers();
+  if (!bg) bg = await context.waitForEvent("serviceworker");
 
-  // Load the offscreen document as a page so its STOP_CAPTURE handler is live.
-  const offscreen = await context.newPage();
-  await offscreen.goto(`${base}/src/offscreen/offscreen.html`);
-
-  // A second extension page observes the runtime messages the offscreen broadcasts.
-  const observer = await context.newPage();
-  await observer.goto(`${base}/src/popup/index.html`);
-  await observer.evaluate(() => {
-    (window as any).__errors = [];
-    chrome.runtime.onMessage.addListener((msg: any) => {
-      if (msg?.type === "ERROR") (window as any).__errors.push(msg.message);
-    });
-  });
-
-  // Simulate Stop arriving with no capture in progress.
-  await observer.evaluate(() =>
-    chrome.runtime.sendMessage({ type: "STOP_CAPTURE" })
+  await bg.evaluate(() =>
+    chrome.runtime.sendMessage({
+      type: "REGION_SELECTED",
+      region: { x: 0, y: 0, w: 320, h: 240, viewportW: 1280, viewportH: 720 },
+    })
   );
 
-  await expect
-    .poll(() => observer.evaluate(() => (window as any).__errors), {
-      timeout: 5000,
-    })
-    .toContain("Recording didn't start — please try again");
+  await expect(page.locator("#region-status")).toContainText("320×240");
 });
 
 test("region overlay injects into a web page and a drag clears it", async () => {
-  // Regression: region selection injects an overlay via scripting.executeScript.
-  // With only activeTab, that background injection was denied ("must request
-  // permission to access the host") on web pages, so ticking Select Region and
-  // clicking Start did nothing. host_permissions for http/https must make the
-  // overlay inject reliably; a valid drag then removes it (and emits
+  // Region selection injects an overlay via scripting.executeScript. With only
+  // activeTab, that background injection was denied ("must request permission to
+  // access the host") on web pages. host_permissions for http/https must make
+  // the overlay inject reliably; a valid drag then removes it (and emits
   // REGION_SELECTED to the background).
   const server = http.createServer((_req, res) => {
     res.setHeader("Content-Type", "text/html");
@@ -221,14 +187,4 @@ test("region overlay injects into a web page and a drag clears it", async () => 
   // Force-close keep-alive sockets so server.close() can actually resolve.
   (server as unknown as { closeAllConnections?: () => void }).closeAllConnections?.();
   await new Promise<void>((r) => server.close(() => r()));
-});
-
-test("recording view markup has a Stop button and timer", async () => {
-  const extensionId = await getExtensionId();
-  const page = await context.newPage();
-  await page.goto(`chrome-extension://${extensionId}/src/popup/index.html`);
-
-  // Verify the recording view is wired up without depending on a live capture.
-  await expect(page.locator("#btn-stop")).toHaveCount(1);
-  await expect(page.locator("#timer")).toHaveText("00:00");
 });

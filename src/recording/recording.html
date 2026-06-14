@@ -2,19 +2,19 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=320" />
+    <meta name="viewport" content="width=340" />
+    <title>GIF Recorder</title>
     <script type="module" src="./recording.ts"></script>
-    <link rel="stylesheet" href="../popup/popup.css">
+    <link rel="stylesheet" href="./recording.css" />
   </head>
   <body>
     <div id="app">
       <!-- Idle View -->
       <div id="view-idle" class="view">
         <h1>GIF Recorder</h1>
-        <label class="checkbox-row">
-          <input type="checkbox" id="use-region" />
-          <span>Select region</span>
-        </label>
+        <p class="meta">Pick a screen, window, or tab to record once you start.</p>
+        <button id="btn-region" class="btn btn-secondary">Select region…</button>
+        <p id="region-status" class="region-status hidden"></p>
         <button id="btn-start" class="btn btn-primary">Start Recording</button>
       </div>
 
@@ -24,12 +24,16 @@
           <span class="rec-dot"></span>
           <span id="timer">00:00</span>
         </div>
+        <p class="meta">
+          Recording in the background. Stop with the toolbar's “Stop sharing”
+          control or the <kbd id="stop-hint">Ctrl+Shift+S</kbd> shortcut.
+        </p>
         <button id="btn-stop" class="btn btn-danger">Stop Recording</button>
       </div>
 
       <!-- Encoding View -->
       <div id="view-encoding" class="view hidden">
-        <h2>Encoding GIF...</h2>
+        <h2>Encoding GIF…</h2>
         <div class="progress-bar">
           <div id="progress-fill" class="progress-fill"></div>
         </div>

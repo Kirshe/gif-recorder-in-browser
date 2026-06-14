@@ -186,6 +186,40 @@ h2 {
   text-align: center;
 }
 
+.meta kbd,
+kbd {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  background: #e2e8f0;
+  color: #1a1a1a;
+  padding: 1px 5px;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+
+@media (prefers-color-scheme: dark) {
+  .meta kbd,
+  kbd {
+    background: #333;
+    color: #e5e5e5;
+  }
+}
+
+/* Region status */
+.region-status {
+  font-size: 12px;
+  color: #2b6cb0;
+  text-align: center;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+@media (prefers-color-scheme: dark) {
+  .region-status {
+    color: #90cdf4;
+  }
+}
+
 /* Error bar */
 .error-bar {
   background: #fed7d7;
