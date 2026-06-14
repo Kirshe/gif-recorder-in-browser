@@ -29,9 +29,13 @@ export async function startCapture(
 ): Promise<void> {
   try {
     // No preferCurrentTab: the player is its own window, so the user chooses the
-    // screen, window, or tab to record from the native picker.
+    // screen, window, or tab to record from the native picker. displaySurface
+    // "monitor" is an ideal hint that opens the picker defaulted to the whole
+    // screen (Chrome honors it; Firefox best-effort) — the user can still pick a
+    // window or tab. The browser always requires a click to share; the surface
+    // can't be auto-selected from extension code.
     const stream = await navigator.mediaDevices.getDisplayMedia({
-      video: true,
+      video: { displaySurface: "monitor" },
       audio: false,
     });
 
