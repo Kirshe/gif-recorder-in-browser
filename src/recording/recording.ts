@@ -12,7 +12,7 @@ const btnRegion = document.getElementById("btn-region") as HTMLButtonElement;
 const btnStart = document.getElementById("btn-start") as HTMLButtonElement;
 const btnStop = document.getElementById("btn-stop") as HTMLButtonElement;
 const btnDownload = document.getElementById("btn-download") as HTMLButtonElement;
-const btnCopy = document.getElementById("btn-copy") as HTMLButtonElement;
+const btnShare = document.getElementById("btn-share") as HTMLButtonElement;
 const btnNew = document.getElementById("btn-new") as HTMLButtonElement;
 
 const regionStatus = document.getElementById("region-status")!;
@@ -29,7 +29,23 @@ let state: State = "idle";
 let recordingStartTime = 0;
 let timerInterval: number | null = null;
 let gifDataUrl = "";
+let gifBlob: Blob | null = null;
 let selectedRegion: Region | undefined;
+
+// Web Share with files reaches the OS share sheet (WhatsApp, Slack, Teams, Mail,
+// …) carrying the real animated GIF. Supported on Chrome/Edge (desktop + mobile)
+// but not Firefox desktop — hide the button there and let Download stand alone.
+function canShareGif(): boolean {
+  try {
+    const probe = new File([new Blob()], "probe.gif", { type: "image/gif" });
+    return (
+      typeof navigator.canShare === "function" &&
+      navigator.canShare({ files: [probe] })
+    );
+  } catch {
+    return false;
+  }
+}
 
 // Show the *actual* configured stop-recording shortcut (it may differ from the
 // suggested default if the user remapped it, or be unset). Reveal the hint copy
@@ -118,10 +134,11 @@ function onEncodingProgress(progress: number) {
   progressText.textContent = `${pct}%`;
 }
 
-function onGifReady(dataUrl: string, size: number) {
+function onGifReady(dataUrl: string, blob: Blob) {
   gifDataUrl = dataUrl;
+  gifBlob = blob;
   gifPreview.src = dataUrl;
-  gifSize.textContent = formatBytes(size);
+  gifSize.textContent = formatBytes(blob.size);
   showView("preview");
 }
 
@@ -192,51 +209,48 @@ btnStop.addEventListener("click", () => {
   void doStop();
 });
 
+function gifFilename(): string {
+  return `recording-${Date.now()}.gif`;
+}
+
 function downloadGif() {
   const a = document.createElement("a");
   a.href = gifDataUrl;
-  a.download = `recording-${Date.now()}.gif`;
+  a.download = gifFilename();
   a.click();
-}
-
-function gifToPngBlob(dataUrl: string): Promise<Blob> {
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    img.onload = () => {
-      const canvas = document.createElement("canvas");
-      canvas.width = img.naturalWidth;
-      canvas.height = img.naturalHeight;
-      const ctx = canvas.getContext("2d");
-      if (!ctx) return reject(new Error("No 2D context"));
-      ctx.drawImage(img, 0, 0);
-      canvas.toBlob((blob) => {
-        if (blob) resolve(blob);
-        else reject(new Error("toBlob failed"));
-      }, "image/png");
-    };
-    img.onerror = () => reject(new Error("Image load failed"));
-    img.src = dataUrl;
-  });
 }
 
 btnDownload.addEventListener("click", downloadGif);
 
-// Clipboards can't hold animated GIFs, so copy a PNG of the first frame.
-btnCopy.addEventListener("click", async () => {
+// Reveal Share only where the OS share sheet can take a file; otherwise Download
+// is the lone, full-width action.
+if (canShareGif()) {
+  btnShare.classList.remove("hidden");
+}
+
+// Hand the real animated GIF to the native share sheet so it can go straight to
+// WhatsApp/Slack/Teams/email. Falls back to a download if sharing is rejected.
+btnShare.addEventListener("click", async () => {
+  if (!gifBlob) return;
+  const file = new File([gifBlob], gifFilename(), { type: "image/gif" });
   try {
-    const pngBlob = await gifToPngBlob(gifDataUrl);
-    await navigator.clipboard.write([
-      new ClipboardItem({ "image/png": pngBlob }),
-    ]);
-    showError("Copied first frame as PNG (clipboards can't hold animated GIFs)");
-  } catch {
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      await navigator.share({ files: [file], title: "GIF Recording" });
+      return;
+    }
     downloadGif();
-    showError("Couldn't copy — file downloaded instead");
+    showError("Sharing isn't available here — file downloaded instead.");
+  } catch (err) {
+    // The user dismissing the share sheet throws AbortError — not a failure.
+    if (err instanceof Error && err.name === "AbortError") return;
+    downloadGif();
+    showError("Couldn't share — file downloaded instead.");
   }
 });
 
 btnNew.addEventListener("click", () => {
   gifDataUrl = "";
+  gifBlob = null;
   gifPreview.src = "";
   clearRegion();
   showView("idle");

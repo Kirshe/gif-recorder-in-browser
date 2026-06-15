@@ -105,6 +105,18 @@ test("recording view markup has a Stop button and timer", async () => {
   await expect(page.locator("#timer")).toHaveText("00:00");
 });
 
+test("preview view has Download and Share actions", async () => {
+  const extensionId = await getExtensionId();
+  const page = await context.newPage();
+  await page.goto(playerUrl(extensionId));
+
+  // Both actions exist in the preview markup. Share is hidden until the Web Share
+  // file capability is confirmed at load (absent in this headless context), while
+  // Download is always available.
+  await expect(page.locator("#btn-download")).toHaveCount(1);
+  await expect(page.locator("#btn-share")).toHaveCount(1);
+});
+
 test("REGION_SELECTED from the background updates the player's region status", async () => {
   // The background relays the chosen region to the player as a runtime message;
   // the player should reflect it in the idle view's status line. A page's own

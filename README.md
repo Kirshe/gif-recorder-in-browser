@@ -74,9 +74,11 @@ Temporary add-ons are removed when Firefox restarts; just load it again.
    (You can also restore the player window and click **Stop Recording**.)
 5. The player reappears and shows the encoding progress, then the **preview**.
    Encoding runs incrementally during recording, so this is usually quick.
-6. **Download** the GIF, or click **Copy**. Clipboards can't hold animated GIFs,
-   so **Copy** places a PNG of the first frame (and downloads the GIF if the
-   clipboard write is rejected).
+6. **Download** the GIF, or click **Share…** to send the real animated GIF to
+   the OS share sheet (WhatsApp, Slack, Teams, Mail, …). Share uses the Web Share
+   API, so it shows on Chrome/Edge (desktop + mobile) but not Firefox desktop,
+   where Download stands alone. (Animated GIFs can't be put on the clipboard, so
+   there's no plain "copy" — share or download the file instead.)
 7. Click **New Recording** to start over.
 
 Recording auto-stops after 30 seconds. The keyboard shortcut can be changed at

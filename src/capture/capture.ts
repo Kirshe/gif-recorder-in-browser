@@ -21,7 +21,9 @@ export interface CaptureCallbacks {
   // Lets the player restore itself on screen and switch to the encoding view.
   onStopBegin: () => void;
   onProgress: (p: number) => void;
-  onComplete: (dataUrl: string, size: number) => void;
+  // The encoded GIF: a data URL for the <img> preview, plus the raw Blob so the
+  // player can share/download the real animated file (size is blob.size).
+  onComplete: (dataUrl: string, blob: Blob) => void;
   onError: (msg: string) => void;
 }
 
@@ -102,7 +104,7 @@ export async function stopCapture(callbacks: CaptureCallbacks): Promise<void> {
       const { width, height } = encoderPool.dimensions;
       const blob = await encoderPool.encode(width, height, DEFAULT_FPS, onProgress);
       const dataUrl = await blobToDataUrl(blob);
-      onComplete(dataUrl, blob.size);
+      onComplete(dataUrl, blob);
     } catch (err) {
       onError(err instanceof Error ? err.message : "Encoding failed");
     }
